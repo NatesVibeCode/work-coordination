@@ -1,0 +1,16 @@
+{
+  "name": "work-coordination-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing work-coordination as tools, with per-filetree visibility",
+  "type": "module",
+  "bin": {
+    "work-coordination-mcp": "./src/index.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  }
+}

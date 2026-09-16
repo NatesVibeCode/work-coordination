@@ -148,3 +148,18 @@ Catch up with `work "<ref>"` and `subscriptions` — every message persists.
 ```sh
 npm test
 ```
+
+## Also in this repo
+
+- `mcp/` — an MCP server exposing this CLI as tree-scoped tools with
+  per-tree visibility config. Lives here so the protocol and the tool ship
+  together; see `mcp/README.md`.
+- `work-seam.dag.json` — the shared vocabulary between this package and the
+  `harness-handoff` contracts. The drift test (`npm test`) fails if the two
+  drift apart.
+
+## License
+
+Source-available under the [Work Coordination Community License](LICENSE):
+free for personal or business use; selling something built on top needs a
+commercial license.

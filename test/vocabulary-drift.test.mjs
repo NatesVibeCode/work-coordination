@@ -7,7 +7,7 @@ import { MESSAGE_STATUSES } from "../src/coordination.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const contractPath = join(root, "..", "harness-handoff", "skills-src", "contracts.json");
-const dagPath = join(root, "..", "work-seam.dag.json");
+const dagPath = join(root, "work-seam.dag.json");
 
 test("status vocabulary matches the handoff contract when checked out beside it", () => {
   if (!existsSync(contractPath)) return;
