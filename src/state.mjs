@@ -59,6 +59,7 @@ export function sendMessage(store, input = {}, options = {}) {
   const persist = () => {
     const message = createMessage(input, options);
     writeJson(join(store.messages, `${message.ref}.json`), message);
+    pruneDecayedMessages(store);
     return message;
   };
   const groupRef = String(input.groupRef ?? "").trim();
@@ -67,26 +68,41 @@ export function sendMessage(store, input = {}, options = {}) {
   return persist();
 }
 
-function messagesMatching(store, field, value) {
+function messagesMatching(store, field, value, cutoff = decayCutoff(store)) {
   const needle = String(value ?? "");
-  const cutoff = decayCutoff(store);
   const kept = [];
+  for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const message = readJson(join(store.messages, entry.name), null);
+    if (!message) continue;
+    if (cutoff !== null && Number(message.createdAt ?? 0) < cutoff) continue;
+    if (message[field] === needle) kept.push(message);
+  }
+  return kept.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// Unfiltered scan for the decayed-vs-missing distinction. Never prunes:
+// the lookup that reports "decayed" must not destroy its own evidence.
+export function rawMessagesForWork(store, workRef) {
+  return messagesMatching(store, "workRef", workRef, null);
+}
+
+// Stale message files are reclaimed when new messages arrive — per-file, so
+// pruning can never disturb a concurrent writer. Backdated sends older than
+// the window are dropped on arrival.
+function pruneDecayedMessages(store) {
+  const cutoff = decayCutoff(store);
+  if (cutoff === null) return;
   for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(store.messages, entry.name);
     const message = readJson(path, null);
-    if (!message) continue;
-    // Decay prunes as it reads: a stale message file is unlinked on sight,
-    // per-file, so pruning can never disturb a concurrent writer.
-    if (cutoff !== null && Number(message.createdAt ?? 0) < cutoff) {
+    if (message && Number(message.createdAt ?? 0) < cutoff) {
       try {
         unlinkSync(path);
       } catch {}
-      continue;
     }
-    if (message[field] === needle) kept.push(message);
   }
-  return kept.sort((a, b) => a.createdAt - b.createdAt);
 }
 
 export function messagesForWork(store, workRef) {
@@ -193,6 +209,27 @@ export function removeGroup(store, groupId) {
   writeFileSync(temporary, kept.length ? `${kept.join("\n")}\n` : "", { mode: 0o600 });
   renameSync(temporary, path);
   return removed;
+}
+
+// One record's standing: active, decayed (a live record cut by the
+// retention window), or missing. TTL-expired groups read as missing, exactly
+// as before — only the decay window gets its own word.
+export function groupState(store, groupId, options = {}) {
+  const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
+  if (!record || !activeGroup(record, options)) return "missing";
+  const cutoff = decayCutoff(store);
+  if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "decayed";
+  return "active";
+}
+
+export function subscriptionState(store, subscriptionId) {
+  const raw = readJson(store.subscriptions, []);
+  const list = Array.isArray(raw) ? raw : [];
+  const record = list.find((subscription) => subscription?.id === String(subscriptionId ?? ""));
+  if (!record) return "missing";
+  const cutoff = decayCutoff(store);
+  if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "decayed";
+  return "active";
 }
 
 export function activeGroups(store, options = {}) {

@@ -23,14 +23,13 @@ function validRecord(value) {
 // nothing ever waits. Readers fold the log with last-write-wins per
 // (session, work) — the same upsert the rewrite used to do — over the
 // legacy participation.json base, which keeps old stores working.
-function load(store) {
-  const cutoff = decayCutoff(store);
+// Every observation ever recorded, retention window ignored. For the
+// decayed-vs-missing distinction only — normal reads go through load().
+export function allObservations(store) {
   const folded = new Map();
   const consider = (record) => {
     const valid = validRecord(record);
-    if (!valid) return;
-    if (cutoff !== null && Number(valid.observedAt ?? 0) < cutoff) return;
-    folded.set(recordKey(valid), valid);
+    if (valid) folded.set(recordKey(valid), valid);
   };
   try {
     const base = JSON.parse(readFileSync(join(store.directory, "participation.json"), "utf8"));
@@ -48,6 +47,12 @@ function load(store) {
     }
   } catch {}
   return [...folded.values()];
+}
+
+function load(store) {
+  const cutoff = decayCutoff(store);
+  if (cutoff === null) return allObservations(store);
+  return allObservations(store).filter((record) => Number(record.observedAt ?? 0) >= cutoff);
 }
 
 export function observeParticipation(store, input = {}, { now = Date.now(), random = Math.random } = {}) {

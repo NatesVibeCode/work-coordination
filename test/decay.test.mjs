@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { activeGroups, createGroup, createState, listSubscriptions, messagesForWork, saveStoreConfig, sendMessage, subscribe, unsubscribe } from "../src/state.mjs";
 import { observeParticipation, observedSessions, workView } from "../src/work-index.mjs";
+import { groupMessagesOp, joinGroupOp, sendAdvisory, showWork, unsubscribeOp } from "../src/operations.mjs";
 
 const DECAY = 900_000;
 const OLD = Date.now() - 3_600_000;
@@ -69,6 +70,41 @@ test("decay off keeps everything for audit", (t) => {
 
   assert.equal(messagesForWork(store, "Ticket T-9").length, 1);
   assert.equal(observedSessions(store).length, 1);
+});
+
+test("addressing a decayed record says decayed; a missing one says unavailable", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-decay-words-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, ".work-coordination");
+  let store = createState(dir);
+  // Accumulate while decay is off, then enable it: stale files predate the
+  // window without any send pruning them first.
+  sendMessage(store, { workRef: "Ticket T-old", sessionRef: "s", body: "Old." }, { now: OLD });
+  const group = createGroup(store, { name: "g" }, { now: Date.now() - 1_800_000 });
+  const sub = subscribe(store, { sessionRef: "lane-1", target: "codex:x" }, { now: OLD, random: () => "s" });
+  saveStoreConfig(dir, { decayMs: DECAY });
+  store = createState(dir);
+
+  assert.equal(showWork(store, "Ticket T-old"), "work decayed");
+  assert.equal(showWork(store, "Ticket T-missing"), "no work context observed");
+  assert.equal(joinGroupOp(store, group.id, "s"), "group decayed");
+  assert.equal(joinGroupOp(store, "g_missing", "s"), "group unavailable");
+  assert.equal(groupMessagesOp(store, group.id), "group decayed");
+  assert.equal(groupMessagesOp(store, "g_missing"), "no messages observed");
+  assert.equal(await sendAdvisory(store, { body: "Hi.", groupRef: group.id, sessionRef: "s" }), "group decayed");
+  assert.equal(unsubscribeOp(store, sub.id), "subscription decayed");
+  assert.equal(unsubscribeOp(store, "s_missing"), "subscription unavailable");
+
+  // New activity revives a decayed work with just the fresh record.
+  await sendAdvisory(store, { body: "Back.", workRef: "Ticket T-old", sessionRef: "s" });
+  assert.match(showWork(store, "Ticket T-old"), /Back\./);
+});
+
+test("observations-only decayed work says decayed", (t) => {
+  const store = makeStore(t, DECAY);
+  observeParticipation(store, { workRef: "Ticket T-1", sessionRef: "gone", harness: "t" }, { now: OLD });
+
+  assert.equal(showWork(store, "Ticket T-1"), "work decayed");
 });
 
 test("init --decay-ms writes the store setting; plain init leaves it alone", (t) => {

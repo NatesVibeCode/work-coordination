@@ -154,7 +154,9 @@ npm test
 A store can forget. Set a retention window in milliseconds — `900000` is
 15 minutes — and records older than the window become invisible everywhere:
 messages, observed sessions, subscriptions, and groups (this caps the group
-TTL). Stale message files are deleted as views pass over them.
+TTL). Stale message files are reclaimed when new messages arrive, per-file,
+so pruning never disturbs a concurrent writer; backdated sends older than
+the window are dropped on arrival.
 
 ```sh
 work-coordination init --decay-ms 900000   # opt this store in
@@ -168,6 +170,12 @@ keeps everything for audit — that is the default. Two things to know:
   A busy work still loses its old records; after 15 quiet minutes, all of
   them are gone. If you want per-work activity expiry instead, say so —
   that is a different feature.
+- Addressing something decayed says so explicitly — `work decayed`,
+  `group decayed`, `subscription decayed` — instead of `unavailable`.
+  Collection listings (`sessions`, `groups`, `subscriptions`) still report
+  the visible set plainly; only single-item lookups distinguish.
+  Sending to a decayed work is new activity: the work revives with just
+  the fresh record.
 - The MCP server honors the same store setting automatically; there is
   nothing to configure on its side.
 
