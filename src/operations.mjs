@@ -62,7 +62,7 @@ export function observe(store, { workRef, sessionRef, harness, directory, worktr
 
 export async function sendAdvisory(store, { body, workRef, sender, sessionRef, groupRef, status, deliver, target, idleTimeoutMs } = {}, { spawnFn } = {}) {
   const message = sendMessage(store, { workRef, sender, sessionRef, groupRef, status, body });
-  if (!message) return groupState(store, groupRef) === "decayed" ? "group decayed" : "group unavailable";
+  if (!message) return groupState(store, groupRef) === "expired" ? "group expired" : "group unavailable";
   const lines = [renderMessage(message)];
   const deliveryOptions = { ...(idleTimeoutMs === undefined || idleTimeoutMs === null ? {} : { idleTimeoutMs }), ...(spawnFn ? { spawnFn } : {}) };
   for (const result of await notifySubscribers(store, message, deliveryOptions)) {
@@ -99,8 +99,8 @@ export function showWork(store, workRef) {
     return `${header}\nparticipants · ${people}\n\n${rendered}`;
   }
   const ref = String(workRef ?? "");
-  const decayed = rawMessagesForWork(store, ref).length > 0 || allObservations(store).some((record) => record.workRef === ref);
-  return decayed ? "work decayed" : "no work context observed";
+  const expired = rawMessagesForWork(store, ref).length > 0 || allObservations(store).some((record) => record.workRef === ref);
+  return expired ? "work expired" : "no work context observed";
 }
 
 export function listGroups(store) {
@@ -114,13 +114,13 @@ export function createGroupOp(store, name) {
 }
 
 export function joinGroupOp(store, groupId, sessionRef) {
-  if (groupState(store, groupId) === "decayed") return "group decayed";
+  if (groupState(store, groupId) === "expired") return "group expired";
   const group = joinGroup(store, groupId, sessionRef);
   return group ? `${group.id} · ${group.members.join(", ")}` : "group unavailable";
 }
 
 export function groupMessagesOp(store, groupRef) {
-  if (groupState(store, groupRef) === "decayed") return "group decayed";
+  if (groupState(store, groupRef) === "expired") return "group expired";
   const messages = messagesForGroup(store, groupRef);
   return messages.length ? messages.map(renderMessage).join("\n\n") : "no messages observed";
 }
@@ -131,7 +131,7 @@ export function subscribeOp(store, { sessionRef, workRef, target } = {}) {
 }
 
 export function unsubscribeOp(store, subscriptionId) {
-  if (subscriptionState(store, subscriptionId) === "decayed") return "subscription decayed";
+  if (subscriptionState(store, subscriptionId) === "expired") return "subscription expired";
   return unsubscribe(store, subscriptionId) ? "unsubscribed" : "subscription unavailable";
 }
 

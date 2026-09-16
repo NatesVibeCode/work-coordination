@@ -27,24 +27,25 @@ function id(prefix, random) {
 export function loadStoreConfig(directory) {
   try {
     const raw = JSON.parse(readFileSync(join(String(directory), "config.json"), "utf8"));
-    const decayMs = Number(raw?.decayMs);
-    return { decayMs: decayMs > 0 ? decayMs : null };
+    // decayMs is the pre-rename key; it still loads so early stores survive.
+    const expiryMs = Number(raw?.expiryMs ?? raw?.decayMs);
+    return { expiryMs: expiryMs > 0 ? expiryMs : null };
   } catch {
-    return { decayMs: null };
+    return { expiryMs: null };
   }
 }
 
 export function saveStoreConfig(directory, config = {}) {
-  const decayMs = Number(config?.decayMs);
-  writeJson(join(String(directory), "config.json"), { decayMs: decayMs > 0 ? decayMs : null });
+  const expiryMs = Number(config?.expiryMs);
+  writeJson(join(String(directory), "config.json"), { expiryMs: expiryMs > 0 ? expiryMs : null });
 }
 
-// Age cutoff for the decay setting, or null to keep everything for audit.
-// Decay is a retention window on record age — not an activity timeout: a
+// Age cutoff for the expiry setting, or null to keep everything for audit.
+// Expiry is a retention window on record age — not an activity timeout: a
 // record older than the window is invisible even under a busy work.
-export function decayCutoff(store, now = Date.now()) {
-  const decayMs = store?.config?.decayMs;
-  return typeof decayMs === "number" && decayMs > 0 ? now - decayMs : null;
+export function expiryCutoff(store, now = Date.now()) {
+  const expiryMs = store?.config?.expiryMs;
+  return typeof expiryMs === "number" && expiryMs > 0 ? now - expiryMs : null;
 }
 
 export function createState(root) {
@@ -59,7 +60,7 @@ export function sendMessage(store, input = {}, options = {}) {
   const persist = () => {
     const message = createMessage(input, options);
     writeJson(join(store.messages, `${message.ref}.json`), message);
-    pruneDecayedMessages(store);
+    pruneExpiredMessages(store);
     return message;
   };
   const groupRef = String(input.groupRef ?? "").trim();
@@ -68,7 +69,7 @@ export function sendMessage(store, input = {}, options = {}) {
   return persist();
 }
 
-function messagesMatching(store, field, value, cutoff = decayCutoff(store)) {
+function messagesMatching(store, field, value, cutoff = expiryCutoff(store)) {
   const needle = String(value ?? "");
   const kept = [];
   for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
@@ -81,8 +82,8 @@ function messagesMatching(store, field, value, cutoff = decayCutoff(store)) {
   return kept.sort((a, b) => a.createdAt - b.createdAt);
 }
 
-// Unfiltered scan for the decayed-vs-missing distinction. Never prunes:
-// the lookup that reports "decayed" must not destroy its own evidence.
+// Unfiltered scan for the expired-vs-missing distinction. Never prunes:
+// the lookup that reports "expired" must not destroy its own evidence.
 export function rawMessagesForWork(store, workRef) {
   return messagesMatching(store, "workRef", workRef, null);
 }
@@ -90,8 +91,8 @@ export function rawMessagesForWork(store, workRef) {
 // Stale message files are reclaimed when new messages arrive — per-file, so
 // pruning can never disturb a concurrent writer. Backdated sends older than
 // the window are dropped on arrival.
-function pruneDecayedMessages(store) {
-  const cutoff = decayCutoff(store);
+function pruneExpiredMessages(store) {
+  const cutoff = expiryCutoff(store);
   if (cutoff === null) return;
   for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
@@ -211,14 +212,16 @@ export function removeGroup(store, groupId) {
   return removed;
 }
 
-// One record's standing: active, decayed (a live record cut by the
-// retention window), or missing. TTL-expired groups read as missing, exactly
-// as before — only the decay window gets its own word.
+// One record's standing: active, expired (a live record cut by the
+// retention window), or missing. The retention check comes first so an
+// old group reads expired even past its TTL; with no window set,
+// TTL-expired groups read as missing, exactly as before.
 export function groupState(store, groupId, options = {}) {
   const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
-  if (!record || !activeGroup(record, options)) return "missing";
-  const cutoff = decayCutoff(store);
-  if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "decayed";
+  if (!record) return "missing";
+  const cutoff = expiryCutoff(store);
+  if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "expired";
+  if (!activeGroup(record, options)) return "missing";
   return "active";
 }
 
@@ -227,13 +230,13 @@ export function subscriptionState(store, subscriptionId) {
   const list = Array.isArray(raw) ? raw : [];
   const record = list.find((subscription) => subscription?.id === String(subscriptionId ?? ""));
   if (!record) return "missing";
-  const cutoff = decayCutoff(store);
-  if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "decayed";
+  const cutoff = expiryCutoff(store);
+  if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "expired";
   return "active";
 }
 
 export function activeGroups(store, options = {}) {
-  const cutoff = decayCutoff(store);
+  const cutoff = expiryCutoff(store);
   return loadGroups(store)
     .map((group) => activeGroup(group, options))
     .filter(Boolean)
@@ -244,7 +247,7 @@ export function activeGroups(store, options = {}) {
 function loadSubscriptions(store) {
   const value = readJson(store.subscriptions, []);
   const list = Array.isArray(value) ? value : [];
-  const cutoff = decayCutoff(store);
+  const cutoff = expiryCutoff(store);
   if (cutoff === null) return list;
   return list.filter((subscription) => Number(subscription?.createdAt ?? 0) >= cutoff);
 }
@@ -281,8 +284,8 @@ export function subscribe(store, input = {}, { now = Date.now(), random = Math.r
 
 export function unsubscribe(store, subscriptionId) {
   const id = String(subscriptionId ?? "");
-  // Decayed subscriptions are already gone: unsubscribing one reports
-  // unavailable instead of reaching past the decay window.
+  // Expired subscriptions are already gone: unsubscribing one reports
+  // unavailable instead of reaching past the retention window.
   if (!loadSubscriptions(store).some((subscription) => subscription.id === id)) return false;
   let removed = false;
   reviseJsonFile(store.subscriptions, [], (value) => {

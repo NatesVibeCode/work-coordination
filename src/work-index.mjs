@@ -1,6 +1,6 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { decayCutoff } from "./state.mjs";
+import { expiryCutoff } from "./state.mjs";
 
 function text(value) {
   return String(value ?? "").trim() || null;
@@ -24,7 +24,7 @@ function validRecord(value) {
 // (session, work) — the same upsert the rewrite used to do — over the
 // legacy participation.json base, which keeps old stores working.
 // Every observation ever recorded, retention window ignored. For the
-// decayed-vs-missing distinction only — normal reads go through load().
+// expired-vs-missing distinction only — normal reads go through load().
 export function allObservations(store) {
   const folded = new Map();
   const consider = (record) => {
@@ -50,7 +50,7 @@ export function allObservations(store) {
 }
 
 function load(store) {
-  const cutoff = decayCutoff(store);
+  const cutoff = expiryCutoff(store);
   if (cutoff === null) return allObservations(store);
   return allObservations(store).filter((record) => Number(record.observedAt ?? 0) >= cutoff);
 }

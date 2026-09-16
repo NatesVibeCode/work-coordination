@@ -59,14 +59,15 @@ const store = storeForTree(process.cwd(), explicitRoot);
 
 if (command === "init") {
   hideLocalState();
-  // Decay is opt-in per store and defaults to off (audit keeps everything).
-  // Plain `init` never touches an existing setting.
-  const decayFlag = takeFlag(args, "--decay-ms");
+  // Expiry is opt-in per store and defaults to off (audit keeps everything).
+  // Plain `init` never touches an existing setting. --decay-ms is the
+  // pre-rename spelling and still works.
+  const expiryFlag = takeFlag(args, "--expiry-ms") ?? takeFlag(args, "--decay-ms");
   let suffix = "";
-  if (decayFlag !== null) {
-    const decayMs = Number(decayFlag);
-    saveStoreConfig(store.directory, { decayMs: decayMs > 0 ? decayMs : null });
-    suffix = decayMs > 0 ? ` · decay ${decayMs}ms` : " · decay off";
+  if (expiryFlag !== null) {
+    const expiryMs = Number(expiryFlag);
+    saveStoreConfig(store.directory, { expiryMs: expiryMs > 0 ? expiryMs : null });
+    suffix = expiryMs > 0 ? ` · expiry ${expiryMs}ms` : " · expiry off";
   }
   process.stdout.write(`initialized · ${store.directory}${suffix}\n`);
 } else if (command === "message") {
