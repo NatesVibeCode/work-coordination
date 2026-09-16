@@ -1,0 +1,20 @@
+{
+  "name": "work-coordination",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "work-coordination": "bin/work-coordination.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
