@@ -8,7 +8,7 @@ process.on("uncaughtException", (error) => {
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readRoadmapItem, renderRoadmapView, roadmapView } from "../src/roadmap.mjs";
-import { removeGroup } from "../src/state.mjs";
+import { removeGroup, saveStoreConfig } from "../src/state.mjs";
 import {
   createGroupOp,
   gitToplevel,
@@ -59,7 +59,16 @@ const store = storeForTree(process.cwd(), explicitRoot);
 
 if (command === "init") {
   hideLocalState();
-  process.stdout.write(`initialized · ${store.directory}\n`);
+  // Decay is opt-in per store and defaults to off (audit keeps everything).
+  // Plain `init` never touches an existing setting.
+  const decayFlag = takeFlag(args, "--decay-ms");
+  let suffix = "";
+  if (decayFlag !== null) {
+    const decayMs = Number(decayFlag);
+    saveStoreConfig(store.directory, { decayMs: decayMs > 0 ? decayMs : null });
+    suffix = decayMs > 0 ? ` · decay ${decayMs}ms` : " · decay off";
+  }
+  process.stdout.write(`initialized · ${store.directory}${suffix}\n`);
 } else if (command === "message") {
   const workRef = takeFlag(args, "--work");
   const sender = takeFlag(args, "--from");

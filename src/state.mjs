@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { activeGroup, createMessage, renderMessage } from "./coordination.mjs";
 import { NO_WRITE, reviseJsonFile } from "./atomic-json.mjs";
@@ -24,12 +24,35 @@ function id(prefix, random) {
   return `${prefix}_${suffix}`;
 }
 
+export function loadStoreConfig(directory) {
+  try {
+    const raw = JSON.parse(readFileSync(join(String(directory), "config.json"), "utf8"));
+    const decayMs = Number(raw?.decayMs);
+    return { decayMs: decayMs > 0 ? decayMs : null };
+  } catch {
+    return { decayMs: null };
+  }
+}
+
+export function saveStoreConfig(directory, config = {}) {
+  const decayMs = Number(config?.decayMs);
+  writeJson(join(String(directory), "config.json"), { decayMs: decayMs > 0 ? decayMs : null });
+}
+
+// Age cutoff for the decay setting, or null to keep everything for audit.
+// Decay is a retention window on record age — not an activity timeout: a
+// record older than the window is invisible even under a busy work.
+export function decayCutoff(store, now = Date.now()) {
+  const decayMs = store?.config?.decayMs;
+  return typeof decayMs === "number" && decayMs > 0 ? now - decayMs : null;
+}
+
 export function createState(root) {
   const directory = String(root);
   const messages = join(directory, "messages");
   ensure(directory);
   ensure(messages);
-  return { directory, messages, groups: join(directory, "groups.json"), subscriptions: join(directory, "subscriptions.json") };
+  return { directory, messages, groups: join(directory, "groups.json"), subscriptions: join(directory, "subscriptions.json"), config: loadStoreConfig(directory) };
 }
 
 export function sendMessage(store, input = {}, options = {}) {
@@ -46,11 +69,24 @@ export function sendMessage(store, input = {}, options = {}) {
 
 function messagesMatching(store, field, value) {
   const needle = String(value ?? "");
-  return readdirSync(store.messages, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => readJson(join(store.messages, entry.name), null))
-    .filter((message) => message?.[field] === needle)
-    .sort((a, b) => a.createdAt - b.createdAt);
+  const cutoff = decayCutoff(store);
+  const kept = [];
+  for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const path = join(store.messages, entry.name);
+    const message = readJson(path, null);
+    if (!message) continue;
+    // Decay prunes as it reads: a stale message file is unlinked on sight,
+    // per-file, so pruning can never disturb a concurrent writer.
+    if (cutoff !== null && Number(message.createdAt ?? 0) < cutoff) {
+      try {
+        unlinkSync(path);
+      } catch {}
+      continue;
+    }
+    if (message[field] === needle) kept.push(message);
+  }
+  return kept.sort((a, b) => a.createdAt - b.createdAt);
 }
 
 export function messagesForWork(store, workRef) {
@@ -160,15 +196,20 @@ export function removeGroup(store, groupId) {
 }
 
 export function activeGroups(store, options = {}) {
+  const cutoff = decayCutoff(store);
   return loadGroups(store)
     .map((group) => activeGroup(group, options))
     .filter(Boolean)
+    .filter((group) => cutoff === null || Number(group.createdAt ?? 0) >= cutoff)
     .map((group) => ({ ...group, members: foldMembers(store, group) }));
 }
 
 function loadSubscriptions(store) {
   const value = readJson(store.subscriptions, []);
-  return Array.isArray(value) ? value : [];
+  const list = Array.isArray(value) ? value : [];
+  const cutoff = decayCutoff(store);
+  if (cutoff === null) return list;
+  return list.filter((subscription) => Number(subscription?.createdAt ?? 0) >= cutoff);
 }
 
 export function subscribe(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
@@ -202,10 +243,14 @@ export function subscribe(store, input = {}, { now = Date.now(), random = Math.r
 }
 
 export function unsubscribe(store, subscriptionId) {
+  const id = String(subscriptionId ?? "");
+  // Decayed subscriptions are already gone: unsubscribing one reports
+  // unavailable instead of reaching past the decay window.
+  if (!loadSubscriptions(store).some((subscription) => subscription.id === id)) return false;
   let removed = false;
   reviseJsonFile(store.subscriptions, [], (value) => {
     const subscriptions = Array.isArray(value) ? value : [];
-    const retained = subscriptions.filter((value) => value.id !== String(subscriptionId ?? ""));
+    const retained = subscriptions.filter((value) => value.id !== id);
     if (retained.length === subscriptions.length) return NO_WRITE;
     removed = true;
     return retained;

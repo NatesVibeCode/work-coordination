@@ -31,6 +31,10 @@ repo's store with the CLI. The one deliberate difference: with no store
 found, the server falls back to `.work-coordination` inside the tree root
 itself, never the home store. A tree's state never leaves its declared root.
 
+The store's decay setting, if any, applies here exactly as it does on the
+CLI — set it with `work-coordination init --decay-ms` in the tree. There is
+nothing to configure on the server side.
+
 ## Tools
 
 - `trees_list` — visible filetrees.

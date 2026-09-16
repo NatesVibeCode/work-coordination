@@ -149,6 +149,28 @@ Catch up with `work "<ref>"` and `subscriptions` — every message persists.
 npm test
 ```
 
+## Decay (optional)
+
+A store can forget. Set a retention window in milliseconds — `900000` is
+15 minutes — and records older than the window become invisible everywhere:
+messages, observed sessions, subscriptions, and groups (this caps the group
+TTL). Stale message files are deleted as views pass over them.
+
+```sh
+work-coordination init --decay-ms 900000   # opt this store in
+work-coordination init --decay-ms 0        # opt back out
+```
+
+Plain `init` never touches an existing setting, and a store without one
+keeps everything for audit — that is the default. Two things to know:
+
+- Decay is a retention window on record **age**, not an activity timeout.
+  A busy work still loses its old records; after 15 quiet minutes, all of
+  them are gone. If you want per-work activity expiry instead, say so —
+  that is a different feature.
+- The MCP server honors the same store setting automatically; there is
+  nothing to configure on its side.
+
 ## Also in this repo
 
 - `mcp/` — an MCP server exposing these operations as tree-scoped tools

@@ -1,5 +1,6 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { decayCutoff } from "./state.mjs";
 
 function text(value) {
   return String(value ?? "").trim() || null;
@@ -23,14 +24,18 @@ function validRecord(value) {
 // (session, work) — the same upsert the rewrite used to do — over the
 // legacy participation.json base, which keeps old stores working.
 function load(store) {
+  const cutoff = decayCutoff(store);
   const folded = new Map();
+  const consider = (record) => {
+    const valid = validRecord(record);
+    if (!valid) return;
+    if (cutoff !== null && Number(valid.observedAt ?? 0) < cutoff) return;
+    folded.set(recordKey(valid), valid);
+  };
   try {
     const base = JSON.parse(readFileSync(join(store.directory, "participation.json"), "utf8"));
     if (Array.isArray(base)) {
-      for (const record of base) {
-        const valid = validRecord(record);
-        if (valid) folded.set(recordKey(valid), valid);
-      }
+      for (const record of base) consider(record);
     }
   } catch {}
   try {
@@ -38,8 +43,7 @@ function load(store) {
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
-        const valid = validRecord(JSON.parse(line));
-        if (valid) folded.set(recordKey(valid), valid);
+        consider(JSON.parse(line));
       } catch {}
     }
   } catch {}
