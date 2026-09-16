@@ -29,6 +29,31 @@ test("renders work context before the optional sender", () => {
   ].join("\n"));
 });
 
+test("stores an optional progress status and drops unknown values", () => {
+  assert.equal(createMessage({ status: "blocked" }).status, "blocked");
+  assert.equal(createMessage({ status: "DONE" }).status, "done");
+  assert.equal(createMessage({}).status, null);
+  assert.equal(createMessage({ status: "sailing" }).status, null);
+});
+
+test("renders the status line only when a known status is present", () => {
+  const text = renderMessage({
+    ref: "m_7k3p",
+    workRef: "Ticket T-123",
+    status: "milestone",
+    advisory: true,
+    body: "Tokenizer now returns spans.",
+  });
+
+  assert.equal(text, [
+    "Work message · #m_7k3p",
+    "Ticket T-123",
+    "status · milestone",
+    "advisory — use if relevant; otherwise continue.",
+    "Tokenizer now returns spans.",
+  ].join("\n"));
+});
+
 test("renders a session message when typed work is absent", () => {
   const text = renderMessage({ ref: "m_7k3p", sender: "Codex", body: "Heads up." });
 

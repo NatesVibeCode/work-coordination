@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+
+process.on("uncaughtException", (error) => {
+  process.stdout.write(`error · ${error?.message ?? error}\n`);
+  process.exitCode = 1;
+});
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,7 +13,7 @@ import { deliverMessage } from "../src/delivery.mjs";
 import { deliverGroupMessage } from "../src/group-delivery.mjs";
 import { observeParticipation, observedSessions, workView } from "../src/work-index.mjs";
 import { readRoadmapItem, renderRoadmapView, roadmapView } from "../src/roadmap.mjs";
-import { createState, activeGroups, createGroup, joinGroup, messagesForGroup, messagesForWork, removeGroup, sendMessage } from "../src/state.mjs";
+import { createState, activeGroups, createGroup, joinGroup, listSubscriptions, messagesForGroup, messagesForWork, notifySubscribers, removeGroup, sendMessage, subscribe, unsubscribe } from "../src/state.mjs";
 
 function takeFlag(args, name) {
   const index = args.indexOf(name);
@@ -67,22 +72,29 @@ if (command === "init") {
   const workRef = takeFlag(args, "--work");
   const sender = takeFlag(args, "--from");
   const groupRef = takeFlag(args, "--group");
+  const status = takeFlag(args, "--status");
+  const session = takeFlag(args, "--session");
   const deliver = takeBoolean(args, "--deliver");
   const target = takeFlag(args, "--to");
-  const message = sendMessage(store, { workRef, sender, groupRef, body: args.join(" ") });
+  const idleTimeout = takeFlag(args, "--idle-timeout-ms");
+  const deliveryOptions = idleTimeout === null ? {} : { idleTimeoutMs: idleTimeout };
+  const message = sendMessage(store, { workRef, sender, sessionRef: session, groupRef, status, body: args.join(" ") });
   if (!message) {
     process.stdout.write("group unavailable\n");
   } else {
     process.stdout.write(`${renderMessage(message)}\n`);
+    for (const result of await notifySubscribers(store, message, deliveryOptions)) {
+      process.stdout.write(result.delivered ? `notified ${result.target} · delivery accepted · ${result.transport}\n` : `notified ${result.target} · delivery unavailable · ${result.warning}\n`);
+    }
     if (deliver) {
       const rendered = renderMessage(message);
       if (target) {
         const [harness, ...rest] = String(target).split(":");
-        const result = deliverMessage({ harness, sessionRef: rest.join(":"), message: rendered });
+        const result = await deliverMessage({ harness, sessionRef: rest.join(":"), message: rendered }, deliveryOptions);
         process.stdout.write(result.delivered ? `delivery accepted · ${result.transport}\n` : `delivery unavailable · ${result.warning}\n`);
       } else {
         const group = activeGroups(store).find((value) => value.id === groupRef);
-        const results = deliverGroupMessage(group, rendered);
+        const results = await deliverGroupMessage(group, rendered, deliveryOptions);
         process.stdout.write(results.length ? `${results.map((result) => result.delivered ? `delivery accepted · ${result.transport}` : `delivery unavailable · ${result.warning}`).join("\n")}\n` : "delivery unavailable · no active group members\n");
       }
     }
@@ -103,6 +115,17 @@ if (command === "init") {
   }
 } else if (command === "ungroup") {
   process.stdout.write(removeGroup(store, args.join(" ")) ? "group removed\n" : "group unavailable\n");
+} else if (command === "subscribe") {
+  const session = takeFlag(args, "--session");
+  const work = takeFlag(args, "--work");
+  const target = takeFlag(args, "--to");
+  const subscription = subscribe(store, { sessionRef: session, workRef: work, target });
+  process.stdout.write(subscription ? `subscribed · ${subscription.id}\n` : "subscription unavailable\n");
+} else if (command === "unsubscribe") {
+  process.stdout.write(unsubscribe(store, args.join(" ")) ? "unsubscribed\n" : "subscription unavailable\n");
+} else if (command === "subscriptions") {
+  const subscriptions = listSubscriptions(store);
+  process.stdout.write(subscriptions.length ? `${subscriptions.map((value) => `${value.id} · ${value.sessionRef}${value.workRef ? ` · ${value.workRef}` : ""} → ${value.targetHarness}:${value.targetSession}`).join("\n")}\n` : "no subscriptions\n");
 } else if (command === "groups") {
   const groups = activeGroups(store);
   process.stdout.write(groups.length ? `${groups.map((group) => `${group.id}${group.name ? ` · ${group.name}` : ""} · ${group.members.join(", ")}`).join("\n")}\n` : "no active groups\n");
@@ -113,8 +136,8 @@ if (command === "init") {
   const workRef = takeFlag(args, "--work");
   const sessionRef = takeFlag(args, "--session");
   const harness = takeFlag(args, "--harness");
-  const directory = takeFlag(args, "--directory");
-  const record = observeParticipation(store, { workRef, sessionRef, harness, directory });
+  const directory = takeFlag(args, "--directory") ?? process.cwd();
+  const record = observeParticipation(store, { workRef, sessionRef, harness, directory, worktree: gitWorktreeRoot() });
   process.stdout.write(`${record.sessionRef}\n`);
 } else if (command === "roadmap") {
   const roadmapKey = args.join(" ");

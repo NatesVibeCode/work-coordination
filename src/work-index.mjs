@@ -29,6 +29,7 @@ export function observeParticipation(store, input = {}, { now = Date.now(), rand
     sessionRef,
     harness: text(input.harness),
     directory: text(input.directory),
+    worktree: text(input.worktree),
     title: text(input.title),
     observedAt: Number(now),
   };

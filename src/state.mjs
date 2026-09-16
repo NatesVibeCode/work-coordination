@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addGroupMember, activeGroup, createMessage } from "./coordination.mjs";
+import { addGroupMember, activeGroup, createMessage, renderMessage } from "./coordination.mjs";
+import { deliverMessage } from "./delivery.mjs";
 import { withLocalLock } from "./locking.mjs";
 
 function ensure(directory) {
@@ -28,7 +29,7 @@ export function createState(root) {
   const messages = join(directory, "messages");
   ensure(directory);
   ensure(messages);
-  return { directory, messages, groups: join(directory, "groups.json") };
+  return { directory, messages, groups: join(directory, "groups.json"), subscriptions: join(directory, "subscriptions.json") };
 }
 
 export function sendMessage(store, input = {}, options = {}) {
@@ -110,4 +111,77 @@ export function removeGroup(store, groupId) {
 
 export function activeGroups(store, options = {}) {
   return loadGroups(store).map((group) => activeGroup(group, options)).filter(Boolean);
+}
+
+function loadSubscriptions(store) {
+  const value = readJson(store.subscriptions, []);
+  return Array.isArray(value) ? value : [];
+}
+
+function saveSubscriptions(store, subscriptions) {
+  writeJson(store.subscriptions, subscriptions);
+}
+
+export function subscribe(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
+  const sessionRef = String(input.sessionRef ?? "").trim() || null;
+  const target = String(input.target ?? "").trim();
+  const [harness, ...rest] = target.split(":");
+  const targetHarness = harness.trim().toLowerCase() || null;
+  const targetSession = rest.join(":").trim() || null;
+  if (!sessionRef || !targetHarness || !targetSession) return null;
+  const workRef = String(input.workRef ?? "").trim() || null;
+  return withLocalLock(store.directory, "subscriptions", () => {
+    const subscriptions = loadSubscriptions(store);
+    const existing = subscriptions.find((value) => value.sessionRef === sessionRef && (value.workRef ?? null) === workRef && value.targetHarness === targetHarness && value.targetSession === targetSession);
+    if (existing) return existing;
+    const subscription = {
+      id: String(input.id ?? "").trim() || id("s", random),
+      sessionRef,
+      workRef,
+      targetHarness,
+      targetSession,
+      createdAt: Number(now),
+    };
+    saveSubscriptions(store, [...subscriptions, subscription]);
+    return subscription;
+  });
+}
+
+export function unsubscribe(store, subscriptionId) {
+  return withLocalLock(store.directory, "subscriptions", () => {
+    const subscriptions = loadSubscriptions(store);
+    const retained = subscriptions.filter((value) => value.id !== String(subscriptionId ?? ""));
+    if (retained.length === subscriptions.length) return false;
+    saveSubscriptions(store, retained);
+    return true;
+  });
+}
+
+export function listSubscriptions(store) {
+  return loadSubscriptions(store);
+}
+
+const FANOUT_STATUSES = ["blocked", "done"];
+
+export async function notifySubscribers(store, message = {}, { spawnFn, idleTimeoutMs } = {}) {
+  const status = String(message.status ?? "").trim().toLowerCase();
+  const sessionRef = String(message.sessionRef ?? "").trim();
+  if (!FANOUT_STATUSES.includes(status) || !sessionRef) return [];
+  const rendered = renderMessage(message);
+  const workRef = String(message.workRef ?? "").trim();
+  const options = {};
+  if (spawnFn !== undefined) options.spawnFn = spawnFn;
+  if (idleTimeoutMs !== undefined) options.idleTimeoutMs = idleTimeoutMs;
+  const results = [];
+  const notified = new Set();
+  for (const value of loadSubscriptions(store)) {
+    if (value.sessionRef !== sessionRef) continue;
+    if (value.workRef && value.workRef !== workRef) continue;
+    const target = `${value.targetHarness}:${value.targetSession}`;
+    if (notified.has(target)) continue;
+    notified.add(target);
+    const result = await deliverMessage({ harness: value.targetHarness, sessionRef: value.targetSession, message: rendered }, options);
+    results.push({ subscriptionId: value.id, target, ...result });
+  }
+  return results;
 }

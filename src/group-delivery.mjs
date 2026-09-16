@@ -5,7 +5,12 @@ function destination(value) {
   return { harness, sessionRef: rest.join(":") };
 }
 
-export function deliverGroupMessage(group, message, { deliver = deliverMessage } = {}) {
+export async function deliverGroupMessage(group, message, { deliver, idleTimeoutMs } = {}) {
+  const send = deliver ?? ((input) => deliverMessage(input, idleTimeoutMs === undefined ? {} : { idleTimeoutMs }));
   const members = Array.isArray(group?.members) ? group.members : [];
-  return members.map((member) => deliver({ ...destination(member), message }));
+  const results = [];
+  for (const member of members) {
+    results.push(await send({ ...destination(member), message }));
+  }
+  return results;
 }

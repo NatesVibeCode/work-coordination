@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { deliverGroupMessage } from "../src/group-delivery.mjs";
 
-test("fans an explicit group message out to each current member without changing membership", () => {
+test("fans an explicit group message out to each current member without changing membership", async () => {
   const calls = [];
-  const results = deliverGroupMessage({ members: ["codex:one", "pi:two"] }, "Heads up.", {
+  const results = await deliverGroupMessage({ members: ["codex:one", "pi:two"] }, "Heads up.", {
     deliver: (input) => { calls.push(input); return { delivered: true, transport: input.harness, warning: null }; },
   });
 
@@ -15,6 +15,6 @@ test("fans an explicit group message out to each current member without changing
   assert.deepEqual(results.map((value) => value.delivered), [true, true]);
 });
 
-test("empty or expired group membership is a no-op", () => {
-  assert.deepEqual(deliverGroupMessage(null, "Heads up."), []);
+test("empty or expired group membership is a no-op", async () => {
+  assert.deepEqual(await deliverGroupMessage(null, "Heads up."), []);
 });

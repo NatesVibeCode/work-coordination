@@ -30,6 +30,24 @@ test("projects an observed harness session under typed work without self-report 
   });
 });
 
+test("observations carry worktree coordinates and default nothing away at the seam", (t) => {
+  const store = state(t);
+  const participant = observeParticipation(store, {
+    workRef: "Ticket T-123",
+    sessionRef: "codex:one",
+    harness: "codex",
+    directory: "/repo/parser",
+    worktree: "/repo",
+  }, { now: 1_000 });
+
+  assert.equal(participant.directory, "/repo/parser");
+  assert.equal(participant.worktree, "/repo");
+
+  const bare = observeParticipation(store, { harness: "hermes" }, { now: 1_000, random: () => "local" });
+  assert.equal(bare.directory, null);
+  assert.equal(bare.worktree, null);
+});
+
 test("unknown work context remains viewable without inventing a workflow", (t) => {
   const store = state(t);
   observeParticipation(store, { harness: "hermes" }, { now: 1_000, random: () => "local" });

@@ -6,6 +6,13 @@ function optionalText(value) {
   return text(value) || null;
 }
 
+export const MESSAGE_STATUSES = ["started", "milestone", "blocked", "done"];
+
+function validStatus(value) {
+  const candidate = text(value).toLowerCase();
+  return MESSAGE_STATUSES.includes(candidate) ? candidate : null;
+}
+
 export function createMessage(input = {}, { now = Date.now(), random = Math.random } = {}) {
   const suppliedRef = optionalText(input.ref);
   const suffix = text(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local";
@@ -14,7 +21,9 @@ export function createMessage(input = {}, { now = Date.now(), random = Math.rand
     createdAt: Number(now),
     workRef: optionalText(input.workRef),
     sender: optionalText(input.sender),
+    sessionRef: optionalText(input.sessionRef),
     groupRef: optionalText(input.groupRef),
+    status: validStatus(input.status),
     body: text(input.body),
     advisory: true,
   };
@@ -24,11 +33,13 @@ export function renderMessage(message = {}) {
   const ref = optionalText(message.ref);
   const workRef = optionalText(message.workRef);
   const sender = optionalText(message.sender);
+  const sessionRef = optionalText(message.sessionRef);
+  const status = validStatus(message.status);
   const heading = `${workRef ? "Work" : "Session"} message${ref ? ` · #${ref}` : ""}`;
   const context = workRef
     ? `${workRef}${sender ? ` · from ${sender}` : ""}`
     : sender ? `from ${sender}` : "";
-  return [heading, context, "advisory — use if relevant; otherwise continue.", text(message.body)]
+  return [heading, context, sessionRef ? `session · ${sessionRef}` : "", status ? `status · ${status}` : "", "advisory — use if relevant; otherwise continue.", text(message.body)]
     .filter((line) => line !== "")
     .join("\n");
 }

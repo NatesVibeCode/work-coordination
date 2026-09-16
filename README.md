@@ -78,7 +78,8 @@ work-coordination \
 work-coordination \
   message "Tokenizer now returns spans." \
   --work "Ticket T-123" \
-  --from "Codex / parser-repair"
+  --from "Codex / parser-repair" \
+  --status milestone
 
 work-coordination \
   observe --work "Ticket T-123" --session codex:one --harness codex
@@ -106,6 +107,8 @@ work-coordination \
   group messages <group-ref>
 
 # Explicitly deliver through a verified native transport.
+# Every transport carries a 60s idle timeout: output resets it, silence
+# past it reports delivery unavailable. A hang never blocks the sender.
 work-coordination \
   message "Tokenizer now returns spans." \
   --work "Ticket T-123" \
@@ -114,7 +117,29 @@ work-coordination \
 
 work-coordination \
   ungroup <group-ref>
+
+# Anyone can subscribe to a lane. A blocked or done report fans out
+# to that lane's subscribers through their transports; failures are
+# reported, never fatal, and nothing ever waits.
+work-coordination \
+  subscribe --session lane-1 --work "Ticket T-123" --to hermes:ops
+
+work-coordination \
+  subscriptions
+
+work-coordination \
+  message "Auth wall, need creds." \
+  --work "Ticket T-123" \
+  --from "Codex / lane-1" \
+  --session lane-1 \
+  --status blocked
+
+work-coordination \
+  unsubscribe <subscription-id>
 ```
+
+New subscribers miss already-sent reports (fan-out is live, never replayed).
+Catch up with `work "<ref>"` and `subscriptions` — every message persists.
 
 `observe` is the adapter seam. A future typed-workflow or native harness adapter calls it with what it observed. It does not ask an agent to self-report or name its own work.
 
