@@ -1,9 +1,10 @@
 # work-coordination-mcp
 
 An MCP server that exposes work-coordination as tools. It lives outside every
-repo it operates on: per call it shells to the `work-coordination` CLI with
-that filetree as the working directory, so state resolves exactly as if a
-local user ran it there.
+repo it operates on, and it needs nothing installed: each tool calls the same
+`src/operations.mjs` layer the CLI uses, in-process, with the tree's store —
+so state resolves exactly as if a local user ran the CLI in that filetree.
+One implementation, two frontends; they cannot drift apart.
 
 ## Visibility across filetrees
 
@@ -12,8 +13,6 @@ Copy `config.example.json` to `config.json` (or point
 
 ```json
 {
-  "cliPath": "work-coordination",
-  "timeoutMs": 120000,
   "trees": [
     { "name": "mdview", "root": "/Users/nate/Public Repos/mdview", "visible": true },
     { "name": "lab", "root": "/tmp/wc-lab-tree", "visible": false }
@@ -21,11 +20,8 @@ Copy `config.example.json` to `config.json` (or point
 }
 ```
 
-`cliPath` must resolve from the server's `PATH` — `npm link` this package
-first, or put the absolute `bin/work-coordination.mjs` path there instead.
-
 Every tool takes a `tree` name, never a path. Unlisted and `"visible": false`
-trees resolve to nothing: calls return `tree unavailable` without spawning
+trees resolve to nothing: calls return `tree unavailable` without touching
 anything, and `trees_list` never names them. `init` is deliberately not
 exposed — the server never creates state or touches repo metadata.
 
@@ -37,9 +33,9 @@ exposed — the server never creates state or touches repo metadata.
 - `sessions`, `work`, `groups`, `group_create`, `group_join`, `group_messages`.
 - `subscribe`, `unsubscribe`, `subscriptions` — anyone may subscribe to any lane.
 
-Transport failures report `unavailable · <reason>` instead of throwing. The
-CLI enforces a 60s idle timeout per send; the server bounds each call with
-`timeoutMs`.
+Internal failures report `unavailable · <reason>` instead of throwing. Sends
+keep the 60s idle delivery timeout from the shared layer (`idle_timeout_ms`
+overrides it per call).
 
 ## Run
 

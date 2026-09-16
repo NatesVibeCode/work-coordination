@@ -1,6 +1,4 @@
 {
-  "cliPath": "work-coordination",
-  "timeoutMs": 120000,
   "trees": [
     { "name": "work-coordination", "root": "/Users/nate/Public Repos/work-coordination", "visible": true },
     { "name": "mdview", "root": "/Users/nate/Public Repos/mdview", "visible": true }

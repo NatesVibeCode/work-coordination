@@ -57,7 +57,7 @@ From this checkout:
 npm link
 ```
 
-That exposes `work-coordination` on your local PATH. No daemon starts and no repository changes happen from installation.
+That exposes `work-coordination` on your local PATH. No daemon starts and no repository changes happen from installation. (The `mcp/` server skips this step entirely — it calls the same operations in-process.)
 
 ## Run it
 
@@ -151,9 +151,10 @@ npm test
 
 ## Also in this repo
 
-- `mcp/` — an MCP server exposing this CLI as tree-scoped tools with
-  per-tree visibility config. Lives here so the protocol and the tool ship
-  together; see `mcp/README.md`.
+- `mcp/` — an MCP server exposing these operations as tree-scoped tools
+  with per-tree visibility config. It calls `src/operations.mjs` in-process —
+  the same layer the CLI uses — so it needs nothing installed. See
+  `mcp/README.md`.
 - `work-seam.dag.json` — the shared vocabulary between this package and the
   `harness-handoff` contracts. The drift test (`npm test`) fails if the two
   drift apart.

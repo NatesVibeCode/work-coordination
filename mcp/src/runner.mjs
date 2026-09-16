@@ -1,27 +1,22 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { resolveTree, visibleTrees } from "./config.mjs";
+import { storeForTree } from "../../src/operations.mjs";
 
-const execFileAsync = promisify(execFile);
-
-export async function runCli(config, treeName, argv, { execFn = execFileAsync } = {}) {
+// Runs an operation against a tree's store in-process: no CLI on PATH, no
+// spawned process, no timeout to tune. The store resolves exactly the way
+// the CLI resolves it from the tree directory, so both frontends see the
+// same state. Unknown and hidden trees never reach the operation.
+export async function runOp(config, treeName, operation) {
   const tree = resolveTree(config, treeName);
   if (!tree) return { ok: false, output: "tree unavailable" };
   try {
-    const { stdout } = await execFn(config.cliPath, argv, { cwd: tree.root, timeout: config.timeoutMs });
-    return { ok: true, output: String(stdout ?? "").trimEnd() || "(no output)" };
+    const output = String(await operation(storeForTree(tree.root), tree) ?? "").trimEnd();
+    return { ok: true, output: output || "(no output)" };
   } catch (error) {
-    const detail = String(error?.stderr ?? error?.message ?? error).trim();
+    const detail = String(error?.message ?? error).trim();
     return { ok: false, output: `unavailable · ${detail || "transport failed"}` };
   }
 }
 
 export function treeNames(config) {
   return visibleTrees(config);
-}
-
-export function flag(argv, name, value) {
-  if (value === undefined || value === null || value === "") return argv;
-  argv.push(name, String(value));
-  return argv;
 }

@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 export function loadConfig(path) {
   const raw = JSON.parse(readFileSync(path, "utf8"));
   const trees = Array.isArray(raw.trees) ? raw.trees : [];
+  // cliPath/timeoutMs from older configs are ignored: operations run
+  // in-process, so there is nothing to spawn and nothing to time out.
   return {
-    cliPath: typeof raw.cliPath === "string" && raw.cliPath ? raw.cliPath : "work-coordination",
-    timeoutMs: Number(raw.timeoutMs) > 0 ? Number(raw.timeoutMs) : 120_000,
     trees: trees
       .filter((entry) => entry && typeof entry.name === "string" && typeof entry.root === "string")
       .map((entry) => ({

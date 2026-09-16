@@ -5,8 +5,22 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  createGroupOp,
+  gitToplevel,
+  groupMessagesOp,
+  joinGroupOp,
+  listGroups,
+  listSessions,
+  listSubscriptionsOp,
+  observe as observeOp,
+  sendAdvisory,
+  showWork,
+  subscribeOp,
+  unsubscribeOp,
+} from "../../src/operations.mjs";
 import { loadConfig } from "./config.mjs";
-import { flag, runCli, treeNames } from "./runner.mjs";
+import { runOp, treeNames } from "./runner.mjs";
 
 const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
 const configPath = process.env.WORK_COORDINATION_MCP_CONFIG ?? join(dirname(fileURLToPath(import.meta.url)), "..", "config.json");
@@ -20,6 +34,10 @@ function text(result) {
   return { content: [{ type: "text", text: result.output }] };
 }
 
+function run(tree, operation) {
+  return runOp(config, tree, operation);
+}
+
 server.registerTool("trees_list", { description: "List filetrees this server may operate in.", inputSchema: {} }, async () => text({ output: treeNames(config).join("\n") || "no visible trees" }));
 
 server.registerTool("observe", {
@@ -31,11 +49,13 @@ server.registerTool("observe", {
     harness: z.string().optional(),
     directory: z.string().optional(),
   },
-}, async ({ tree, work, session, harness, directory }) => {
-  const argv = ["observe"];
-  flag(flag(flag(flag(argv, "--work", work), "--session", session), "--harness", harness), "--directory", directory);
-  return text(await runCli(config, tree, argv));
-});
+}, async ({ tree, work, session, harness, directory }) => text(await run(tree, (store, resolved) => observeOp(store, {
+  workRef: work,
+  sessionRef: session,
+  harness,
+  directory: directory ?? resolved.root,
+  worktree: gitToplevel(resolved.root),
+}))));
 
 server.registerTool("message", {
   description: "Send an advisory message scoped to work. Optional progress status; blocked and done fan out to subscribers.",
@@ -51,30 +71,32 @@ server.registerTool("message", {
     deliver: z.boolean().optional(),
     idle_timeout_ms: z.number().optional(),
   },
-}, async ({ tree, body, work, from, session, group, status, to, deliver, idle_timeout_ms }) => {
-  const argv = ["message", body];
-  flag(flag(flag(flag(argv, "--work", work), "--from", from), "--session", session), "--group", group);
-  flag(argv, "--status", status);
-  if (to) { argv.push("--to", to); }
-  if (deliver) { argv.push("--deliver"); }
-  if (idle_timeout_ms !== undefined) { argv.push("--idle-timeout-ms", String(idle_timeout_ms)); }
-  return text(await runCli(config, tree, argv));
-});
+}, async ({ tree, body, work, from, session, group, status, to, deliver, idle_timeout_ms }) => text(await run(tree, (store) => sendAdvisory(store, {
+  body,
+  workRef: work,
+  sender: from,
+  sessionRef: session,
+  groupRef: group,
+  status,
+  deliver,
+  target: to,
+  idleTimeoutMs: idle_timeout_ms,
+}))));
 
 server.registerTool("sessions", {
   description: "List observed sessions in one filetree.",
   inputSchema: { tree: Tree },
-}, async ({ tree }) => text(await runCli(config, tree, ["sessions"])));
+}, async ({ tree }) => text(await run(tree, (store) => listSessions(store))));
 
 server.registerTool("work", {
   description: "Show one typed work with its participants and messages.",
   inputSchema: { tree: Tree, ref: z.string() },
-}, async ({ tree, ref }) => text(await runCli(config, tree, ["work", ref])));
+}, async ({ tree, ref }) => text(await run(tree, (store) => showWork(store, ref))));
 
 server.registerTool("groups", {
   description: "List active ephemeral groups in one filetree.",
   inputSchema: { tree: Tree },
-}, async ({ tree }) => text(await runCli(config, tree, ["groups"])));
+}, async ({ tree }) => text(await run(tree, (store) => listGroups(store))));
 
 // group_create gives a lane a private coordination address with a delivery
 // route the spawner can reach; it never routes through the spawner, so a
@@ -85,11 +107,7 @@ server.registerTool("group_create", {
     tree: Tree,
     name: z.string().optional(),
   },
-}, async ({ tree, name }) => {
-  const argv = ["group", "create"];
-  if (name) argv.push(name);
-  return text(await runCli(config, tree, argv));
-});
+}, async ({ tree, name }) => text(await run(tree, (store) => createGroupOp(store, name))));
 
 server.registerTool("group_join", {
   description: "Join a session to an ephemeral group.",
@@ -98,7 +116,7 @@ server.registerTool("group_join", {
     group: z.string(),
     session: z.string(),
   },
-}, async ({ tree, group, session }) => text(await runCli(config, tree, ["group", "join", group, session])));
+}, async ({ tree, group, session }) => text(await run(tree, (store) => joinGroupOp(store, group, session))));
 
 server.registerTool("group_messages", {
   description: "Read messages addressed to an ephemeral group.",
@@ -106,7 +124,7 @@ server.registerTool("group_messages", {
     tree: Tree,
     group: z.string(),
   },
-}, async ({ tree, group }) => text(await runCli(config, tree, ["group", "messages", group])));
+}, async ({ tree, group }) => text(await run(tree, (store) => groupMessagesOp(store, group))));
 
 server.registerTool("subscribe", {
   description: "Subscribe to a lane: blocked and done reports fan out to the target. Anyone may subscribe.",
@@ -116,11 +134,11 @@ server.registerTool("subscribe", {
     work: z.string().optional(),
     to: z.string(),
   },
-}, async ({ tree, session, work, to }) => {
-  const argv = ["subscribe", "--session", session, "--to", to];
-  if (work) argv.push("--work", work);
-  return text(await runCli(config, tree, argv));
-});
+}, async ({ tree, session, work, to }) => text(await run(tree, (store) => subscribeOp(store, {
+  sessionRef: session,
+  workRef: work,
+  target: to,
+}))));
 
 server.registerTool("unsubscribe", {
   description: "Remove a lane subscription.",
@@ -128,11 +146,11 @@ server.registerTool("unsubscribe", {
     tree: Tree,
     id: z.string(),
   },
-}, async ({ tree, id }) => text(await runCli(config, tree, ["unsubscribe", id])));
+}, async ({ tree, id }) => text(await run(tree, (store) => unsubscribeOp(store, id))));
 
 server.registerTool("subscriptions", {
   description: "List lane subscriptions in one filetree.",
   inputSchema: { tree: Tree },
-}, async ({ tree }) => text(await runCli(config, tree, ["subscriptions"])));
+}, async ({ tree }) => text(await run(tree, (store) => listSubscriptionsOp(store))));
 
 await server.connect(new StdioServerTransport());
