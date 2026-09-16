@@ -43,10 +43,12 @@ export function gitToplevel(start) {
 }
 
 // Same resolution the CLI uses from a tree directory: nearest
-// .work-coordination walking up, else the home fallback. An explicit state
-// directory (the CLI --state flag) wins over both.
-export function storeForTree(treeRoot, explicitStateDir = null) {
-  const root = explicitStateDir ?? localState(treeRoot) ?? join(homedir(), ".work-coordination");
+// .work-coordination walking up, else the fallback. An explicit state
+// directory (the CLI --state flag) wins over both. The CLI keeps the home
+// fallback; the MCP server passes a tree-local fallback so a tree without
+// its own store still never reads or writes outside the declared root.
+export function storeForTree(treeRoot, explicitStateDir = null, fallbackDir = null) {
+  const root = explicitStateDir ?? localState(treeRoot) ?? fallbackDir ?? join(homedir(), ".work-coordination");
   return createState(root);
 }
 

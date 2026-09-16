@@ -23,7 +23,13 @@ Copy `config.example.json` to `config.json` (or point
 Every tool takes a `tree` name, never a path. Unlisted and `"visible": false`
 trees resolve to nothing: calls return `tree unavailable` without touching
 anything, and `trees_list` never names them. `init` is deliberately not
-exposed — the server never creates state or touches repo metadata.
+exposed.
+
+State resolves the way the CLI resolves it from the tree directory —
+nearest `.work-coordination` walking up, so a tree inside a repo shares that
+repo's store with the CLI. The one deliberate difference: with no store
+found, the server falls back to `.work-coordination` inside the tree root
+itself, never the home store. A tree's state never leaves its declared root.
 
 ## Tools
 
