@@ -1,25 +1,49 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { withLocalLock } from "./locking.mjs";
 
 function text(value) {
   return String(value ?? "").trim() || null;
 }
 
-function load(store) {
-  try {
-    const value = JSON.parse(readFileSync(join(store.directory, "participation.json"), "utf8"));
-    return Array.isArray(value) ? value : [];
-  } catch {
-    return [];
-  }
+function logPath(store) {
+  return join(store.directory, "participation.jsonl");
 }
 
-function save(store, records) {
-  const path = join(store.directory, "participation.json");
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
+function recordKey(record) {
+  return JSON.stringify([record?.sessionRef ?? null, record?.workRef ?? null]);
+}
+
+function validRecord(value) {
+  return value && typeof value === "object" && typeof value.sessionRef === "string" ? value : null;
+}
+
+// Observations are append-only: one atomic append per observe, never a
+// read-modify-write, so concurrent observers cannot lose each other and
+// nothing ever waits. Readers fold the log with last-write-wins per
+// (session, work) — the same upsert the rewrite used to do — over the
+// legacy participation.json base, which keeps old stores working.
+function load(store) {
+  const folded = new Map();
+  try {
+    const base = JSON.parse(readFileSync(join(store.directory, "participation.json"), "utf8"));
+    if (Array.isArray(base)) {
+      for (const record of base) {
+        const valid = validRecord(record);
+        if (valid) folded.set(recordKey(valid), valid);
+      }
+    }
+  } catch {}
+  try {
+    const raw = readFileSync(logPath(store), "utf8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const valid = validRecord(JSON.parse(line));
+        if (valid) folded.set(recordKey(valid), valid);
+      } catch {}
+    }
+  } catch {}
+  return [...folded.values()];
 }
 
 export function observeParticipation(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
@@ -33,14 +57,8 @@ export function observeParticipation(store, input = {}, { now = Date.now(), rand
     title: text(input.title),
     observedAt: Number(now),
   };
-  return withLocalLock(store.directory, "participation", () => {
-    const records = load(store);
-    const index = records.findIndex((value) => value.sessionRef === record.sessionRef && value.workRef === record.workRef);
-    if (index >= 0) records[index] = record;
-    else records.push(record);
-    save(store, records);
-    return record;
-  });
+  appendFileSync(logPath(store), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  return record;
 }
 
 export function observedSessions(store) {

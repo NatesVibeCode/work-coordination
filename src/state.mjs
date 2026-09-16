@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addGroupMember, activeGroup, createMessage, renderMessage } from "./coordination.mjs";
+import { activeGroup, createMessage, renderMessage } from "./coordination.mjs";
+import { NO_WRITE, reviseJsonFile } from "./atomic-json.mjs";
 import { deliverMessage } from "./delivery.mjs";
-import { withLocalLock } from "./locking.mjs";
 
 function ensure(directory) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -40,10 +40,8 @@ export function sendMessage(store, input = {}, options = {}) {
   };
   const groupRef = String(input.groupRef ?? "").trim();
   if (!groupRef) return persist();
-  return withLocalLock(store.directory, "groups", () => {
-    if (!activeGroups(store, options).some((group) => group.id === groupRef)) return null;
-    return persist();
-  });
+  if (!activeGroups(store, options).some((group) => group.id === groupRef)) return null;
+  return persist();
 }
 
 function messagesMatching(store, field, value) {
@@ -68,8 +66,47 @@ function loadGroups(store) {
   return Array.isArray(value) ? value : [];
 }
 
-function saveGroups(store, groups) {
-  writeJson(store.groups, groups);
+function memberLogPath(store) {
+  return join(store.directory, "members.jsonl");
+}
+
+function readMemberLog(store) {
+  let raw;
+  try {
+    raw = readFileSync(memberLogPath(store), "utf8");
+  } catch {
+    return [];
+  }
+  const entries = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry && typeof entry.group === "string" && typeof entry.member === "string") entries.push(entry);
+    } catch {}
+  }
+  return entries;
+}
+
+// Membership is append-only: a join is one atomic append, never a
+// read-modify-write, so concurrent joins cannot lose each other and nothing
+// ever waits. Readers fold the log over the record's base members, which
+// keeps legacy stores working — their members are simply the base.
+function foldMembers(store, group) {
+  const seen = new Set();
+  const members = [];
+  const push = (member) => {
+    const value = String(member ?? "").trim();
+    if (value && !seen.has(value)) {
+      seen.add(value);
+      members.push(value);
+    }
+  };
+  for (const member of Array.isArray(group?.members) ? group.members : []) push(member);
+  for (const entry of readMemberLog(store)) {
+    if (entry.group === group?.id) push(entry.member);
+  }
+  return members;
 }
 
 export function createGroup(store, input = {}, { now = Date.now(), random = Math.random, ttlMs = 60 * 60 * 1000 } = {}) {
@@ -80,46 +117,58 @@ export function createGroup(store, input = {}, { now = Date.now(), random = Math
     createdAt: Number(now),
     expiresAt: Number(now) + Math.max(0, Number(ttlMs) || 0),
   };
-  return withLocalLock(store.directory, "groups", () => {
-    saveGroups(store, [...loadGroups(store), group]);
-    return group;
+  reviseJsonFile(store.groups, [], (value) => {
+    const groups = Array.isArray(value) ? value : [];
+    return [...groups, group];
   });
+  return group;
 }
 
 export function joinGroup(store, groupId, sessionRef, options = {}) {
-  return withLocalLock(store.directory, "groups", () => {
-    const groups = loadGroups(store);
-    const index = groups.findIndex((group) => group.id === String(groupId ?? ""));
-    if (index < 0) return null;
-    if (!String(sessionRef ?? "").trim()) return groups[index];
-    const updated = addGroupMember(groups[index], sessionRef, options);
-    groups[index] = updated;
-    saveGroups(store, groups);
-    return updated;
-  });
+  const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
+  if (!record) return null;
+  const member = String(sessionRef ?? "").trim();
+  if (member) {
+    appendFileSync(memberLogPath(store), `${JSON.stringify({ group: record.id, member, at: Number(options?.now ?? Date.now()) })}\n`, { mode: 0o600 });
+  }
+  return { ...record, members: foldMembers(store, record) };
 }
 
 export function removeGroup(store, groupId) {
-  return withLocalLock(store.directory, "groups", () => {
-    const groups = loadGroups(store);
-    const retained = groups.filter((group) => group.id !== String(groupId ?? ""));
-    if (retained.length === groups.length) return false;
-    saveGroups(store, retained);
-    return true;
+  const id = String(groupId ?? "");
+  let removed = false;
+  reviseJsonFile(store.groups, [], (value) => {
+    const groups = Array.isArray(value) ? value : [];
+    const retained = groups.filter((group) => group.id !== id);
+    if (retained.length === groups.length) return NO_WRITE;
+    removed = true;
+    return retained;
   });
+  if (!removed) return false;
+  // Prune the log so a later group reusing this id starts empty. A join
+  // racing the prune may vanish from the log, but the record is gone either
+  // way, so nothing visible changes.
+  const kept = [];
+  for (const entry of readMemberLog(store)) {
+    if (entry.group !== id) kept.push(JSON.stringify(entry));
+  }
+  const path = memberLogPath(store);
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, kept.length ? `${kept.join("\n")}\n` : "", { mode: 0o600 });
+  renameSync(temporary, path);
+  return removed;
 }
 
 export function activeGroups(store, options = {}) {
-  return loadGroups(store).map((group) => activeGroup(group, options)).filter(Boolean);
+  return loadGroups(store)
+    .map((group) => activeGroup(group, options))
+    .filter(Boolean)
+    .map((group) => ({ ...group, members: foldMembers(store, group) }));
 }
 
 function loadSubscriptions(store) {
   const value = readJson(store.subscriptions, []);
   return Array.isArray(value) ? value : [];
-}
-
-function saveSubscriptions(store, subscriptions) {
-  writeJson(store.subscriptions, subscriptions);
 }
 
 export function subscribe(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
@@ -130,10 +179,14 @@ export function subscribe(store, input = {}, { now = Date.now(), random = Math.r
   const targetSession = rest.join(":").trim() || null;
   if (!sessionRef || !targetHarness || !targetSession) return null;
   const workRef = String(input.workRef ?? "").trim() || null;
-  return withLocalLock(store.directory, "subscriptions", () => {
-    const subscriptions = loadSubscriptions(store);
+  let result;
+  reviseJsonFile(store.subscriptions, [], (value) => {
+    const subscriptions = Array.isArray(value) ? value : [];
     const existing = subscriptions.find((value) => value.sessionRef === sessionRef && (value.workRef ?? null) === workRef && value.targetHarness === targetHarness && value.targetSession === targetSession);
-    if (existing) return existing;
+    if (existing) {
+      result = existing;
+      return NO_WRITE;
+    }
     const subscription = {
       id: String(input.id ?? "").trim() || id("s", random),
       sessionRef,
@@ -142,19 +195,22 @@ export function subscribe(store, input = {}, { now = Date.now(), random = Math.r
       targetSession,
       createdAt: Number(now),
     };
-    saveSubscriptions(store, [...subscriptions, subscription]);
-    return subscription;
+    result = subscription;
+    return [...subscriptions, subscription];
   });
+  return result;
 }
 
 export function unsubscribe(store, subscriptionId) {
-  return withLocalLock(store.directory, "subscriptions", () => {
-    const subscriptions = loadSubscriptions(store);
+  let removed = false;
+  reviseJsonFile(store.subscriptions, [], (value) => {
+    const subscriptions = Array.isArray(value) ? value : [];
     const retained = subscriptions.filter((value) => value.id !== String(subscriptionId ?? ""));
-    if (retained.length === subscriptions.length) return false;
-    saveSubscriptions(store, retained);
-    return true;
+    if (retained.length === subscriptions.length) return NO_WRITE;
+    removed = true;
+    return retained;
   });
+  return removed;
 }
 
 export function listSubscriptions(store) {
