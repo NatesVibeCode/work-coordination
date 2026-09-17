@@ -7,6 +7,7 @@ process.on("uncaughtException", (error) => {
 });
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { MESSAGE_STATUSES } from "../src/coordination.mjs";
 import { roadmapViewFor } from "../src/roadmap.mjs";
 import { removeGroup, saveStoreConfig } from "../src/state.mjs";
 import {
@@ -224,13 +225,20 @@ async function run(commandName, args, explicitState) {
     const idleTimeout = values.has("--idle-timeout-ms")
       ? numericFlag(values, "--idle-timeout-ms", { minimum: 1, help })
       : undefined;
+    // A typo'd status used to be dropped on the floor: the message stored
+    // fine with status null and nothing said so, which reads exactly like
+    // "no status given".
+    const status = values.has("--status") ? String(values.get("--status")).trim().toLowerCase() : null;
+    if (status !== null && !MESSAGE_STATUSES.includes(status)) {
+      usage(`unknown status · ${values.get("--status")}`, `statuses: ${MESSAGE_STATUSES.join(", ")}`, help);
+    }
     return await sendAdvisory(store, {
       body: positional.join(" "),
       workRef: value("--work"),
       sender: value("--from"),
       sessionRef: value("--session"),
       groupRef: value("--group"),
-      status: value("--status"),
+      status,
       deliver: values.get("--deliver") ?? false,
       target: value("--to"),
       idleTimeoutMs: idleTimeout,

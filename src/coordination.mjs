@@ -14,8 +14,31 @@ export function oneLine(value) {
     .trim();
 }
 
+// Values that can only ever be text. `String({})` is "[object Object]" and
+// `String([1,2])` is "1,2": both would be stored and routed as if a caller had
+// meant them, so a shape that is not text is named instead. Numbers and
+// booleans still coerce, which is what a JSON caller expects.
 export function textField(value) {
+  if (value === null || value === undefined) return null;
+  const type = typeof value;
+  if (type !== "string" && type !== "number" && type !== "boolean") {
+    throw new TypeError(`expected text, got ${Array.isArray(value) ? "array" : type}`);
+  }
   return oneLine(value) || null;
+}
+
+// A delivery destination is "<harness>:<session>", and both halves are routing
+// identifiers rather than display text: they are compared for equality when
+// deciding whether two subscriptions address the same place, and case-folded
+// by the transport. Splitting them in three places is how "Codex:A" and
+// "codex:a" became two subscriptions delivering twice to one recipient, so
+// there is one parser and it always normalizes.
+export function destinationOf(value) {
+  const [harness, ...rest] = oneLine(value).split(":");
+  return {
+    harness: harness.trim().toLowerCase(),
+    sessionRef: rest.join(":").trim().toLowerCase(),
+  };
 }
 
 function optionalText(value) {

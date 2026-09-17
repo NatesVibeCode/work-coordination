@@ -38,9 +38,11 @@ typo stays a typo instead of becoming a real directory holding an empty store.
 
 State resolves the way the CLI resolves it from the tree directory —
 nearest `.work-coordination` walking up, so a tree inside a repo shares that
-repo's store with the CLI. The one deliberate difference: with no store
-found, the server falls back to `.work-coordination` inside the tree root
-itself, never the home store. A tree's state never leaves its declared root.
+repo's store with the CLI. With no store found, the fallback is
+`.work-coordination` inside the tree root itself — for the server *and* the
+CLI. Nothing ever falls back to a home-directory store: a shared pool made two
+unrelated uninitialized trees see each other's sessions. A tree's state never
+leaves its declared root.
 A tree may also declare `"state"` explicitly (same path rules as `root`) to
 put its store somewhere of its own choosing.
 

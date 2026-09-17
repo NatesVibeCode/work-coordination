@@ -85,9 +85,10 @@ session down.
 
 The server resolves a tree's store the way the CLI resolves it from that
 directory — nearest `.work-coordination` walking up, so a tree inside a repo
-shares the repo's store with the CLI. The one deliberate difference: with no
-store found, it falls back to `.work-coordination` **inside the tree root**,
-never the home store. A tree's state never leaves its declared root.
+shares the repo's store with the CLI. With no store found, both fall back to
+`.work-coordination` **inside the tree root**. Neither ever uses a
+home-directory store: one shared pool made unrelated uninitialized trees see
+each other's sessions and messages. A tree's state never leaves its root.
 
 The tree's own expiry setting applies here automatically; there is nothing to
 configure server-side.

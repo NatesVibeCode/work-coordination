@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -221,6 +221,121 @@ test("a dash-led flag value is refused, and numeric flags keep their own message
     assert.match(result.output, /--idle-timeout-ms needs a number/);
   }
   assert.equal(run(repo, "--state", state, "message", "hi", "--idle-timeout-ms", "500").status, 0);
+});
+
+test("an unknown --status is refused, not silently dropped", (t) => {
+  const state = emptyStore(t, "status-value");
+  for (const bogus of ["bogus", "in-progress", "start"]) {
+    const result = run(repo, "--state", state, "message", "hi", "--work", "T", "--status", bogus);
+    assert.equal(result.status, 1, `expected refusal for --status ${bogus}`);
+    assert.match(result.output, /unknown status/);
+    assert.match(result.output, /started, milestone, blocked, done/);
+  }
+  // A valid status still works, and the case-folded spelling is accepted.
+  assert.equal(run(repo, "--state", state, "message", "hi", "--work", "T", "--status", "milestone").status, 0);
+  assert.match(run(repo, "--state", state, "work", "T").output, /status · milestone/);
+  assert.equal(run(repo, "--state", state, "message", "hi", "--work", "T", "--status", "DONE").status, 0);
+});
+
+test("an uninitialized tree keeps its coordination to itself", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-isolation-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  const repoA = join(root, "repoA");
+  const repoB = join(root, "repoB");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(repoA, { recursive: true });
+  mkdirSync(repoB, { recursive: true });
+  const env = { ...process.env, HOME: home };
+
+  const cli = (cwd, ...args) => execFileSync(process.execPath, [script, ...args], { cwd, encoding: "utf8", env });
+  cli(repoA, "observe", "--work", "Ticket-A", "--session", "codex:A");
+
+  // repoA must not have leaked into a global pool that repoB can read.
+  assert.equal(cli(repoB, "sessions"), "no sessions observed\n");
+  assert.equal(cli(repoB, "work", "Ticket-A"), "no work context observed\n");
+  assert.equal(existsSync(join(home, ".work-coordination")), false, "nothing may land in the home store");
+  assert.equal(existsSync(join(repoA, ".work-coordination")), true, "state stays with the tree");
+
+  // And repoB's own observations stay its own.
+  cli(repoB, "observe", "--work", "Ticket-B", "--session", "codex:B");
+  assert.equal(cli(repoA, "sessions").includes("Ticket-B"), false);
+});
+
+test("one destination is one subscription regardless of case", (t) => {
+  const state = emptyStore(t, "target-case");
+  const first = run(repo, "--state", state, "subscribe", "--session", "L1", "--to", "Codex:A").output;
+  const second = run(repo, "--state", state, "subscribe", "--session", "L1", "--to", "codex:a").output;
+
+  assert.match(first, /subscribed/);
+  assert.match(second, /subscribed/);
+  const rows = run(repo, "--state", state, "subscriptions").output.trim().split("\n").filter(Boolean);
+  assert.equal(rows.length, 1, `expected one subscription, got ${rows.length}`);
+  assert.match(rows[0], /codex:a/, "the stored destination is normalized");
+});
+
+test("a non-text field is refused instead of stringified into a routing key", (t) => {
+  const state = createState(mkdtempSync(join(tmpdir(), "work-coordination-shape-")));
+  t.after(() => rmSync(state.directory, { recursive: true, force: true }));
+
+  for (const [field, value, expected] of [
+    ["sessionRef", { oops: true }, "object"],
+    ["workRef", ["a", "b"], "array"],
+    ["sender", () => {}, "function"],
+  ]) {
+    assert.throws(() => sendMessage(state, { workRef: "T", body: "x", [field]: value }), new RegExp(`expected text, got ${expected}`), field);
+  }
+  // Numbers and booleans are what a JSON caller means by text, so they coerce.
+  assert.equal(sendMessage(state, { workRef: "T", sessionRef: 42, body: "x" }).sessionRef, "42");
+  assert.equal(sendMessage(state, { workRef: true, body: "x" }).workRef, "true");
+});
+
+test("expired groups and subscriptions are reclaimed on the next write", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-reclaim-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, "state");
+  createState(dir);
+  saveStoreConfig(dir, { expiryMs: 900_000 });
+  const state = createState(dir);
+  const old = Date.now() - 3_600_000;
+
+  // Dead records used to sit on disk forever: invisible to every read, still
+  // accumulating with each new record.
+  for (let index = 0; index < 20; index++) {
+    const group = createGroup(state, { id: `g_dead${index}`, name: `dead${index}` }, { now: old, ttlMs: 3_600_000 });
+    joinGroup(state, group.id, `s${index}`, { now: old });
+    subscribe(state, { sessionRef: `lane${index}`, target: `codex:t${index}` }, { now: old });
+  }
+  const onDisk = () => ({
+    groups: JSON.parse(readFileSync(join(dir, "groups.json"), "utf8")).length,
+    subscriptions: JSON.parse(readFileSync(join(dir, "subscriptions.json"), "utf8")).length,
+  });
+  assert.equal(onDisk().subscriptions, 20, "the fixture is on disk before the write");
+  assert.equal(onDisk().groups, 20);
+
+  subscribe(state, { sessionRef: "lane-new", target: "codex:new" });
+  assert.equal(onDisk().subscriptions, 1, "expired subscriptions are reclaimed, the new one kept");
+
+  createGroup(state, { id: "g_fresh" });
+  assert.equal(onDisk().groups, 1, "expired groups are reclaimed, the new one kept");
+});
+
+test("a record inside the retention window still reports expired, not missing", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-expired-wording-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, "state");
+  createState(dir);
+  saveStoreConfig(dir, { expiryMs: 900_000 });
+  const state = createState(dir);
+  const old = Date.now() - 3_600_000;
+
+  // Aged out of the retention window but well inside its own group TTL, and
+  // nothing has written since — the wording must survive.
+  const group = createGroup(state, { id: "g_aged" }, { now: old, ttlMs: 7_200_000 });
+  assert.equal(group.id, "g_aged");
+  const cli = (args) => execFileSync(process.execPath, [script, ...args], { cwd: repo, encoding: "utf8" });
+  assert.equal(cli(["--state", dir, "group", "join", "g_aged", "s1"]), "group expired\n");
+  assert.equal(cli(["--state", dir, "group", "messages", "g_aged"]), "group expired\n");
 });
 
 test("every write path uses a unique scratch name and cleans up", (t) => {

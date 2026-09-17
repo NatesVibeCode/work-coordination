@@ -1,6 +1,6 @@
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { activeGroup, createMessage, oneLine, renderMessage } from "./coordination.mjs";
+import { activeGroup, createMessage, destinationOf, oneLine, renderMessage, textField } from "./coordination.mjs";
 import { NO_WRITE, replaceFile, replaceJsonFile, reviseJsonFile } from "./atomic-json.mjs";
 import { deliverMessage, mapBounded } from "./delivery.mjs";
 
@@ -197,14 +197,37 @@ function foldMembers(store, group) {
   return members;
 }
 
+// Dead records are reclaimed when a new one is written, exactly the way stale
+// message files are reclaimed on arrival. Without this a store accumulated
+// expired groups and subscriptions forever — hidden from every read, still on
+// disk, and growing with each new record. Nothing a read can still see is
+// removed, so the expiry wording ("group expired" for a record inside the
+// retention window) is unaffected.
+function pruneExpiredRecords(store, { now = Date.now() } = {}) {
+  const cutoff = expiryCutoff(store, now);
+  reviseJsonFile(store.groups, [], (value) => {
+    const groups = Array.isArray(value) ? value : [];
+    const live = groups.filter((group) => Number(group?.expiresAt ?? 0) > now
+      && (cutoff === null || Number(group?.createdAt ?? 0) >= cutoff));
+    return live.length === groups.length ? NO_WRITE : live;
+  });
+  reviseJsonFile(store.subscriptions, [], (value) => {
+    const subscriptions = Array.isArray(value) ? value : [];
+    if (cutoff === null) return NO_WRITE;
+    const live = subscriptions.filter((subscription) => Number(subscription?.createdAt ?? 0) >= cutoff);
+    return live.length === subscriptions.length ? NO_WRITE : live;
+  });
+}
+
 export function createGroup(store, input = {}, { now = Date.now(), random = Math.random, ttlMs = 60 * 60 * 1000 } = {}) {
   const group = {
-    id: oneLine(input.id) || id("g", random),
-    name: oneLine(input.name) || null,
+    id: textField(input.id) || id("g", random),
+    name: textField(input.name) || null,
     members: [],
     createdAt: Number(now),
     expiresAt: Number(now) + Math.max(0, Number(ttlMs) || 0),
   };
+  pruneExpiredRecords(store, { now });
   reviseJsonFile(store.groups, [], (value) => {
     const groups = Array.isArray(value) ? value : [];
     return [...groups, group];
@@ -223,7 +246,7 @@ export function joinGroup(store, groupId, sessionRef, options = {}) {
   if (current !== "active") return null;
   const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
   if (!record) return null;
-  const member = oneLine(sessionRef);
+  const member = textField(sessionRef);
   const members = foldMembers(store, record);
   if (member && !members.includes(member)) {
     appendFileSync(memberLogPath(store), `${JSON.stringify({ group: record.id, member, at: Number(options?.now ?? Date.now()) })}\n`, { mode: 0o600 });
@@ -234,6 +257,9 @@ export function joinGroup(store, groupId, sessionRef, options = {}) {
 export function removeGroup(store, groupId) {
   const id = String(groupId ?? "");
   let removed = false;
+  // Deliberately no expiry sweep here: this removes exactly what it was asked
+  // to remove. A sweep on the wall clock would also delete a group a caller
+  // created against an injected clock, which is what this test seam is for.
   reviseJsonFile(store.groups, [], (value) => {
     const groups = Array.isArray(value) ? value : [];
     const retained = groups.filter((group) => group.id !== id);
@@ -294,14 +320,12 @@ function loadSubscriptions(store) {
 }
 
 export function subscribe(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
-  const sessionRef = oneLine(input.sessionRef) || null;
-  const target = oneLine(input.target);
-  const [harness, ...rest] = target.split(":");
-  const targetHarness = harness.trim().toLowerCase() || null;
-  const targetSession = rest.join(":").trim() || null;
+  const sessionRef = textField(input.sessionRef);
+  const { harness: targetHarness, sessionRef: targetSession } = destinationOf(input.target);
   if (!sessionRef || !targetHarness || !targetSession) return null;
-  const workRef = oneLine(input.workRef) || null;
+  const workRef = textField(input.workRef);
   let result;
+  pruneExpiredRecords(store, { now });
   reviseJsonFile(store.subscriptions, [], (value) => {
     const subscriptions = Array.isArray(value) ? value : [];
     const existing = subscriptions.find((value) => value.sessionRef === sessionRef && (value.workRef ?? null) === workRef && value.targetHarness === targetHarness && value.targetSession === targetSession);
@@ -310,7 +334,7 @@ export function subscribe(store, input = {}, { now = Date.now(), random = Math.r
       return NO_WRITE;
     }
     const subscription = {
-      id: oneLine(input.id) || id("s", random),
+      id: textField(input.id) || id("s", random),
       sessionRef,
       workRef,
       targetHarness,

@@ -1,8 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { oneLine, renderMessage } from "./coordination.mjs";
+import { destinationOf, oneLine, renderMessage } from "./coordination.mjs";
 import { deliverMessage } from "./delivery.mjs";
 import { deliverGroupMessage } from "./group-delivery.mjs";
 import { allObservations, observeParticipation, observedSessions, workView } from "./work-index.mjs";
@@ -46,13 +45,14 @@ export function gitToplevel(start) {
   }
 }
 
-// Same resolution the CLI uses from a tree directory: nearest
-// .work-coordination walking up, else the fallback. An explicit state
-// directory (the CLI --state flag) wins over both. The CLI keeps the home
-// fallback; the MCP server passes a tree-local fallback so a tree without
-// its own store still never reads or writes outside the declared root.
+// Store resolution, in priority order: an explicit --state directory, the
+// nearest .work-coordination walking up from the tree, then a tree-local
+// fallback. The fallback is deliberately INSIDE the tree: a home-directory
+// store made every uninitialized directory on the machine share one pool, so
+// two unrelated repos saw each other's sessions and messages. Coordination
+// stays where the work is.
 export function storeDirectoryForTree(treeRoot, explicitStateDir = null, fallbackDir = null) {
-  return explicitStateDir ?? localState(treeRoot) ?? fallbackDir ?? join(homedir(), ".work-coordination");
+  return explicitStateDir ?? localState(treeRoot) ?? fallbackDir ?? join(resolve(treeRoot), ".work-coordination");
 }
 
 // `create` decides whether resolving a store may bring it into existence.
@@ -79,8 +79,7 @@ export async function sendAdvisory(store, { body, workRef, sender, sessionRef, g
   if (deliver) {
     const rendered = renderMessage(message);
     if (target) {
-      const [harness, ...rest] = String(target).split(":");
-      const result = await deliverMessage({ harness, sessionRef: rest.join(":"), message: rendered }, deliveryOptions);
+      const result = await deliverMessage({ ...destinationOf(target), message: rendered }, deliveryOptions);
       lines.push(result.delivered ? `delivery accepted · ${result.transport}` : `delivery unavailable · ${result.warning}`);
     } else {
       const group = activeGroups(store).find((value) => value.id === groupRef);

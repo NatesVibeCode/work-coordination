@@ -91,6 +91,12 @@ This creates `.work-coordination/`, gives it private permissions, and adds that 
 
 Once initialized, commands run from that repository or its subdirectories use its local state automatically. `--state <path>` remains available when you want an explicit state location.
 
+Without a store, nothing reaches outside the directory you are in: the nearest
+`.work-coordination` walking up wins, and with none the store is
+`.work-coordination` right here. There is deliberately no home-directory
+fallback — one shared pool made two unrelated uninitialized directories see
+each other's sessions and messages.
+
 ```sh
 work-coordination \
   observe --work "Ticket T-123" --session codex:one --harness codex

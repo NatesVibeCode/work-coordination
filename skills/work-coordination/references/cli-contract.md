@@ -11,7 +11,14 @@ work-coordination [--state <path>] <command> [args] [flags]
 
 `--state <path>` (or `--state=<path>`) may appear before or after the
 subcommand. Without it, the nearest `.work-coordination` walking up from the
-current directory is used.
+current directory is used, and with none the store is `.work-coordination` in
+the current directory. There is no home-directory store.
+
+A `--status` value outside `started|milestone|blocked|done` is a usage error;
+an unset status is simply absent.
+
+A destination (`--to`, or a group member) is compared case-insensitively:
+`Codex:A` and `codex:a` are one destination, not two.
 
 ## Commands
 
