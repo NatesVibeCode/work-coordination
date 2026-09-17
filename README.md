@@ -147,11 +147,11 @@ work-coordination \
 work-coordination \
   ungroup <group-ref>
 
-# Anyone can subscribe to a lane. A blocked or done report fans out
-# to that lane's subscribers through their transports; failures are
+# Anyone may subscribe a session's reports to a destination. A blocked or
+# done report fans out to them through their transports; failures are
 # reported, never fatal, and nothing ever waits.
 work-coordination \
-  subscribe --session lane-1 --work "Ticket T-123" --to hermes:ops
+  subscribe --session codex:parser --work "Ticket T-123" --to hermes:ops
 
 work-coordination \
   subscriptions
@@ -159,8 +159,8 @@ work-coordination \
 work-coordination \
   message "Auth wall, need creds." \
   --work "Ticket T-123" \
-  --from "Codex / lane-1" \
-  --session lane-1 \
+  --from "Codex / parser-repair" \
+  --session codex:parser \
   --status blocked
 
 work-coordination \

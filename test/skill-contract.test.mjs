@@ -144,6 +144,38 @@ test("the CLI contract in the skill matches the CLI's own tables", () => {
   }
 });
 
+test("the skill keeps the vocabulary straight, including what a lane is not", () => {
+  const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8");
+  const model = readFileSync(join(skillDir, "references", "coordination-model.md"), "utf8");
+
+  // A session read this skill and could not work out what to do, because the
+  // skill taught "subscribe a lane" as if this tool owned lanes. A lane is a
+  // process the host harness spawns; this tool only ever sees the session it
+  // registers as. The four real words must be defined, and the impostor must
+  // be named as not one of ours.
+  for (const word of ["**work**", "**session**", "**group**", "**subscription**"]) {
+    assert.match(skill, new RegExp(word.replace(/\*/g, "\\*")), `the skill must define ${word}`);
+  }
+  assert.match(skill, /A lane is none of these/);
+  assert.match(skill, /no lane command/, "and must say there are no lane commands");
+  assert.match(skill, /lanes\/<name>\.json/, "and must name the third meaning so it is not confused");
+
+  // The tool's own output must not call a subscription a lane either. The one
+  // section allowed to say "lane" is the disambiguation itself — that is where
+  // it is being explained.
+  const withoutGlossary = (text) => {
+    const start = text.indexOf("## Words that mean something specific");
+    if (start < 0) return text;
+    const end = text.indexOf("\n## ", start + 1);
+    return `${text.slice(0, start)}${end < 0 ? "" : text.slice(end)}`;
+  };
+  for (const [file, text] of [["SKILL.md", skill], ["coordination-model.md", model]]) {
+    for (const line of withoutGlossary(text).split("\n")) {
+      assert.equal(/\blane/i.test(line), false, `"lane" used outside the glossary in ${file}: ${line.trim()}`);
+    }
+  }
+});
+
 test("the skill never promises control it does not have", () => {
   const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8");
   // Banned phrasings: the tool is advisory-only by design.

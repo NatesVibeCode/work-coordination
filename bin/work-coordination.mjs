@@ -50,7 +50,7 @@ const HELP = [
   "  retry                                 try those deliveries again",
   "  group create|join|messages <args>      ephemeral group lifecycle",
   "  ungroup <group>                       remove a group",
-  "  subscribe --session <id> --to <h>:<id> [--work <ref>]   lane subscription",
+  "  subscribe --session <id> --to <h>:<id> [--work <ref>]   send that session's reports",
   "  unsubscribe <id>                      remove a subscription",
   "  roadmap <key>                         read a roadmap item, read-only",
   "statuses: started, milestone, blocked, done (only blocked and done notify)",

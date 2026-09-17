@@ -99,9 +99,9 @@ server.registerTool("groups", {
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listGroups(store))));
 
-// group_create gives a lane a private coordination address with a delivery
-// route the spawner can reach; it never routes through the spawner, so a
-// thread ban on the spawner does not silence the lane.
+// group_create gives a set of sessions a private coordination address with a
+// delivery route the spawner can reach; it never routes through the spawner,
+// so a thread ban on the spawner does not silence them.
 server.registerTool("group_create", {
   description: "Create an ephemeral coordination group with an expiry.",
   inputSchema: {
@@ -128,7 +128,7 @@ server.registerTool("group_messages", {
 }, async ({ tree, group }) => text(await run(tree, (store) => groupMessagesOp(store, group))));
 
 server.registerTool("subscribe", {
-  description: "Subscribe to a lane: blocked and done reports fan out to the target. Anyone may subscribe.",
+  description: "Send this session's blocked and done reports to a destination. Anyone may subscribe.",
   inputSchema: {
     tree: Tree,
     session: z.string(),
@@ -142,7 +142,7 @@ server.registerTool("subscribe", {
 }))));
 
 server.registerTool("unsubscribe", {
-  description: "Remove a lane subscription.",
+  description: "Remove a subscription.",
   inputSchema: {
     tree: Tree,
     id: z.string(),
@@ -150,7 +150,7 @@ server.registerTool("unsubscribe", {
 }, async ({ tree, id }) => text(await run(tree, (store) => unsubscribeOp(store, id))));
 
 server.registerTool("subscriptions", {
-  description: "List lane subscriptions in one filetree.",
+  description: "List subscriptions in one filetree.",
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listSubscriptionsOp(store))));
 

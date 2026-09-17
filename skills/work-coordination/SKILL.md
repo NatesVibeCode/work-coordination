@@ -1,13 +1,13 @@
 ---
 name: work-coordination
-description: Coordinate concurrent agent sessions in a shared local tree using the work-coordination CLI or its MCP server — declare presence under typed work, send advisory messages, read a work's participants and messages, run ephemeral groups, and subscribe lanes to blocked/done reports. Use when several sessions work the same tree and you need presence and advisory traffic without ownership, locks, assignment, or control over another session.
+description: Coordinate concurrent agent sessions in a shared local tree using the work-coordination CLI or its MCP server — declare presence under typed work, send advisory messages, read a work's participants and messages, run ephemeral groups, and subscribe a session's blocked/done reports to a destination. Use when several sessions work the same tree and you need presence and advisory traffic without ownership, locks, assignment, or control over another session.
 ---
 
 # Work coordination
 
 Local, work-first coordination for concurrent agent sessions. You can declare
 presence under typed work, send advisory messages, read what a work's
-participants have said, run ephemeral groups, and subscribe a lane to
+participants have said, run ephemeral groups, and subscribe a session's
 `blocked`/`done` reports.
 
 **Read this first:** this system carries *information*, never *authority*.
@@ -60,6 +60,29 @@ Where the store lives, in order: an explicit `--state <path>`, else the nearest
 store** — coordination never leaves the tree you are standing in, so two
 unrelated directories cannot see each other's sessions.
 
+## Words that mean something specific
+
+Four words are the whole vocabulary, and confusing them is the usual reason a
+session cannot work out what to do.
+
+| Word | What it is | What it is not |
+| --- | --- | --- |
+| **work** | A typed outcome reference (`"Ticket T-123"`). The join key everything hangs off. | Not a tracker, not a ticket system, not a status board. A string. |
+| **session** | The identity a harness reports for one running thing (`codex:parser`). This is what `--session` takes and what a participant list shows. | Not a lane, not a role, not a person. |
+| **group** | An ephemeral address with an expiry that sessions can join, so one message scoped to it reaches all of them. | Not a team, not a permission, not a boundary, not durable. |
+| **subscription** | "Send this session's `blocked`/`done` reports to that destination." Made by `subscribe`. | Not a watch, not a hook, nothing that can steer anything. |
+
+**A lane is none of these.** A lane is a process the host harness spawns —
+`harness-handoff`'s word. This tool has no lane command, no lane object, and no
+lane state. A spawned lane reports itself as a *session*, and that session is
+all work-coordination ever sees. Anything about spawning, managing, or listing
+lanes belongs to the harness, not here. (Your fleet also calls a discovery
+query config in `lanes/<name>.json` a "lane" — a third, unrelated meaning. Ask
+which one is meant.)
+
+So when a work has several things on it, you do not "add a lane" here: you
+`observe` each session under the work, and optionally `subscribe` one.
+
 ## The four moves
 
 ### 1. Declare presence
@@ -95,8 +118,8 @@ unavailable):
 ```sh
 work-coordination message "Auth wall, need creds." \
   --work "Ticket T-123" \
-  --from "Codex / lane-1" \
-  --session lane-1 \
+  --from "Codex / parser-repair" \
+  --session codex:parser \
   --status blocked \
   --to codex:<thread-id> \
   --deliver
@@ -111,14 +134,14 @@ Delivery is best-effort and bounded by a 60s idle timeout
 work-coordination work "Ticket T-123"   # participants + messages for one work
 work-coordination sessions              # observed sessions
 work-coordination groups                # active groups
-work-coordination subscriptions         # lane subscriptions
+work-coordination subscriptions         # who reports where, and to whom
 ```
 
 `work` answers `no work context observed` when there is nothing, and
 `work expired` when records existed but aged past the store's retention
 window. Prefer `work` over guessing from `sessions`.
 
-### 4. Ephemeral groups and lanes
+### 4. Groups and subscriptions
 
 ```sh
 work-coordination group create parser-work
@@ -126,7 +149,7 @@ work-coordination group join <group-ref> codex:one
 work-coordination group messages <group-ref>
 work-coordination ungroup <group-ref>
 
-work-coordination subscribe --session lane-1 --work "Ticket T-123" --to hermes:ops
+work-coordination subscribe --session codex:parser --work "Ticket T-123" --to hermes:ops
 work-coordination subscriptions
 work-coordination unsubscribe <subscription-id>
 ```

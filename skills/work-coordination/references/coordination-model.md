@@ -47,13 +47,13 @@ message. It is not the center of the model.
 | Message | `message` | Someone said this, advisably | An instruction that must be followed |
 | Group | `group create` | An ephemeral address with an expiry | A team, a permission, or a boundary |
 | Membership | `group join` | This session answers at this address | Entitlement to anything |
-| Subscription | `subscribe` | Send this lane's blocked/done reports there | A watch that can stop or steer the lane |
+| Subscription | `subscribe` | Send this session's blocked/done reports there | A watch that can stop or steer anything |
 
 ## Statuses
 
 `started` · `milestone` · `blocked` · `done`
 
-Only `blocked` and `done` fan out to subscribers of the same lane. The other
+Only `blocked` and `done` fan out to the subscribers of the reporting session. The other
 two are recorded and readable. This vocabulary is shared with the
 `harness-handoff` contracts and the `work-seam.dag.json` seam; a drift test
 checks the package against the seam DAG (and against the handoff contract when
