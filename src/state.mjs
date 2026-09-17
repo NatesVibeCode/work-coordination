@@ -207,6 +207,11 @@ function foldMembers(store, group) {
 // disk, and growing with each new record. Nothing a read can still see is
 // removed, so the expiry wording ("group expired" for a record inside the
 // retention window) is unaffected.
+//
+// Membership travels with its group: a group that has just been reclaimed
+// takes its member lines with it, which is the only reclamation the member log
+// ever gets. Lines belonging to groups that still exist are left alone, so a
+// concurrent join cannot lose its record to a prune.
 function pruneExpiredRecords(store, { now = Date.now() } = {}) {
   const cutoff = expiryCutoff(store, now);
   reviseJsonFile(store.groups, [], (value) => {
@@ -221,6 +226,18 @@ function pruneExpiredRecords(store, { now = Date.now() } = {}) {
     const live = subscriptions.filter((subscription) => Number(subscription?.createdAt ?? 0) >= cutoff);
     return live.length === subscriptions.length ? NO_WRITE : live;
   });
+  pruneOrphanedMembers(store);
+}
+
+// A member line whose group is gone can never be read: every path to it goes
+// through a group record first. Reclaim those, and only those.
+function pruneOrphanedMembers(store) {
+  const entries = readMemberLog(store);
+  if (!entries.length) return;
+  const live = new Set((readJson(store.groups, []) ?? []).map((group) => group?.id));
+  const kept = entries.filter((entry) => live.has(entry.group));
+  if (kept.length === entries.length) return;
+  replaceFile(memberLogPath(store), kept.length ? `${kept.map((entry) => JSON.stringify(entry)).join("\n")}\n` : "");
 }
 
 export function createGroup(store, input = {}, { now = Date.now(), random = Math.random, ttlMs = 60 * 60 * 1000 } = {}) {

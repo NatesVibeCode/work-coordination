@@ -1,0 +1,44 @@
+name: test
+
+# Nothing gated a push, so a fix could silently regress. This runs what a fresh
+# clone is told to run, on the minimum supported Node and a current one.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The package requires >=22.5.
+        node: ["22.5", "24"]
+    name: node ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The root suite has no dependencies, so it needs no install. Without
+      # the MCP SDK it reports the protocol file as skipped — that path is
+      # fine for a human on a fresh clone, and is asserted below to be
+      # honest: it must be a skip, never a failure and never silent.
+      - name: Root suite (fresh clone, no install)
+        run: npm test
+
+      # With the dependency present, the protocol suite must actually run.
+      # Any skip here fails the job, so the skip path cannot become the
+      # normal path in CI.
+      - name: MCP suite (SDK installed, skips forbidden)
+        working-directory: mcp
+        run: |
+          set -o pipefail
+          npm ci --no-audit --no-fund
+          node --test 2>&1 | tee /tmp/mcp-suite.log
+          if grep -qE '^﹣|# SKIP|skipped 0*[1-9]' /tmp/mcp-suite.log; then
+            echo "::error::the MCP suite skipped a test; every test must run in CI"
+            exit 1
+          fi

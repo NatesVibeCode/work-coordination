@@ -28,9 +28,10 @@ participants have said, run ephemeral groups, and subscribe a lane to
    presence as a conflict.** Overlap is normal and expected.
 3. **Only `blocked` and `done` fan out** to subscribers. `started` and
    `milestone` are recorded and readable; they notify nobody.
-4. **Exit code 1 means your command was malformed** (unknown flag, repeated
-   flag, non-numeric timeout) — not "no work found." Read the message; do not
-   retry the same shape.
+4. **Exit code 1 means your command was malformed** (unknown flag, unknown
+   status, a bodyless message, a non-numeric timeout) — not "no work found."
+   Read the message; do not retry the same shape. A legitimate answer such as
+   `no sessions observed`, `unavailable`, or `expired` exits 0.
 5. **Read-only commands never create anything.** `sessions`, `groups`,
    `subscriptions`, `work`, `group messages`, and `roadmap` answer from an
    empty tree without touching disk. Only `init` and the writing commands
@@ -52,6 +53,12 @@ work-coordination subscriptions
 
 If nothing is initialized, say so and continue with the work. Do not create a
 store to make the output look better.
+
+Where the store lives, in order: an explicit `--state <path>`, else the nearest
+`.work-coordination` walking up from the current directory, else
+`.work-coordination` in the current directory. There is **no home-directory
+store** — coordination never leaves the tree you are standing in, so two
+unrelated directories cannot see each other's sessions.
 
 ## The four moves
 

@@ -127,7 +127,9 @@ export function createGroupOp(store, name) {
 export function joinGroupOp(store, groupId, sessionRef) {
   if (groupState(store, groupId) === "expired") return "group expired";
   const group = joinGroup(store, groupId, sessionRef);
-  return group ? `${oneLine(group.id)} · ${group.members.map(oneLine).join(", ")}` : "group unavailable";
+  // A group with no members yet renders an empty field rather than a trailing
+  // separator with nothing after it.
+  return group ? [oneLine(group.id), group.members.map(oneLine).join(", ")].filter(Boolean).join(" · ") : "group unavailable";
 }
 
 export function groupMessagesOp(store, groupRef) {

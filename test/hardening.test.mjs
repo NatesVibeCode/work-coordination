@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { oneLine } from "../src/coordination.mjs";
-import { createGroup, createState, joinGroup, removeGroup, saveStoreConfig, sendMessage, subscribe } from "../src/state.mjs";
+import { activeGroups, createGroup, createState, joinGroup, removeGroup, saveStoreConfig, sendMessage, subscribe } from "../src/state.mjs";
 
 const script = fileURLToPath(new URL("../bin/work-coordination.mjs", import.meta.url));
 const repo = dirname(dirname(script));
@@ -355,6 +355,72 @@ test("a bodyless message is a malformed call, not an empty record", async (t) =>
 
   assert.equal(run(repo, "--state", state, "message", "real body", "--work", "T").status, 0);
   assert.equal(readdirSync(join(state, "messages")).length, 1);
+});
+
+test("a reclaimed group takes its member lines with it, and only its own", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-orphans-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const state = createState(root);
+  const memberLines = () => {
+    try {
+      return readFileSync(join(state.directory, "members.jsonl"), "utf8").trim().split("\n").filter(Boolean).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  // Groups that have already died, each with a member line that no read can
+  // ever reach: every path to membership goes through a group record.
+  const born = Date.now() - 10_000;
+  for (let index = 0; index < 5; index++) {
+    joinGroup(state, createGroup(state, { id: `g_dead${index}` }, { now: born, ttlMs: 1_000 }).id, `sess${index}`, { now: born });
+  }
+  assert.equal(memberLines(), 5);
+
+  // A live group's membership must survive the sweep.
+  const live = createGroup(state, { id: "g_live" });
+  joinGroup(state, live.id, "codex:live");
+
+  assert.equal(JSON.parse(readFileSync(state.groups, "utf8")).length, 1);
+  assert.equal(memberLines(), 1, "the dead groups' lines are reclaimed, the live group's is kept");
+  assert.deepEqual(activeGroups(state).map((group) => `${group.id}:${group.members.join(",")}`), ["g_live:codex:live"]);
+});
+
+test("sessions shows a re-observed session as recently seen", async (t) => {
+  const { observeParticipation, observedSessions } = await import("../src/work-index.mjs");
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-freshness-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const state = createState(root);
+  const first = Date.now() - 20 * 60 * 1000;
+  const observation = { workRef: "T", sessionRef: "codex:one", harness: "codex" };
+
+  observeParticipation(state, observation, { now: first });
+  assert.equal(observedSessions(state)[0].observedAt, first);
+
+  // A heartbeat outside the dedup window re-declares the observation, so the
+  // session does not read as last seen twenty minutes ago.
+  observeParticipation(state, observation, { now: Date.now() });
+  assert.equal(observedSessions(state)[0].observedAt > first, true, "recency advances");
+  assert.equal(observedSessions(state).length, 1, "and it is still one session");
+});
+
+test("group join needs both a group and a session", (t) => {
+  const state = emptyStore(t, "join-args");
+  const gid = run(repo, "--state", state, "group", "create", "lane").output.trim().split(" ")[0];
+
+  // A join with nobody to join reported success with an empty member list,
+  // while the MCP tool refused the same call.
+  for (const args of [["group", "join", gid], ["group", "join", gid, ""], ["group", "join"]]) {
+    const result = run(repo, "--state", state, ...args);
+    assert.equal(result.status, 1, `expected refusal for ${args.join(" ")}`);
+    assert.match(result.output, /group join needs a group and a session/);
+  }
+  assert.equal(existsSync(join(state, "members.jsonl")), false);
+
+  // A real join works and reads back.
+  assert.match(run(repo, "--state", state, "group", "join", gid, "codex:one").output, /codex:one/);
+  assert.match(run(repo, "--state", state, "group", "join", gid, "codex:two").output, /codex:one, codex:two/);
+  assert.equal(readFileSync(join(state, "members.jsonl"), "utf8").trim().split("\n").length, 2);
 });
 
 test("every write path uses a unique scratch name and cleans up", (t) => {

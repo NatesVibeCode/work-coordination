@@ -252,7 +252,14 @@ async function run(commandName, args, explicitState) {
   if (commandName === "group") {
     const action = positional.shift();
     if (action === "create") return createGroupOp(store, positional.join(" "));
-    if (action === "join") return joinGroupOp(store, positional.shift(), positional.join(" "));
+    if (action === "join") {
+      // A join with nobody to join says "success" with an empty member list,
+      // and the MCP tool refuses the same call — the CLI should not be the
+      // looser frontend. A group with no members yet prints an empty field.
+      const [groupRef, ...rest] = positional;
+      if (!groupRef || !rest.join(" ").trim()) usage("group join needs a group and a session", "group join <group> <session>");
+      return joinGroupOp(store, groupRef, rest.join(" "));
+    }
     if (action === "messages") return groupMessagesOp(store, positional.join(" "));
     return "nothing to do — try: group create [name] | group join <group> <session> | group messages <group>";
   }
