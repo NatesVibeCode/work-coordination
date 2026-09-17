@@ -7,7 +7,7 @@ process.on("uncaughtException", (error) => {
 });
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readRoadmapItem, renderRoadmapView, roadmapView } from "../src/roadmap.mjs";
+import { roadmapViewFor } from "../src/roadmap.mjs";
 import { removeGroup, saveStoreConfig } from "../src/state.mjs";
 import {
   createGroupOp,
@@ -20,24 +20,124 @@ import {
   observe,
   sendAdvisory,
   showWork,
+  storeDirectoryForTree,
   storeForTree,
   subscribeOp,
   unsubscribeOp,
 } from "../src/operations.mjs";
 
-function takeFlag(args, name) {
-  const index = args.indexOf(name);
-  if (index < 0) return null;
-  const value = args[index + 1];
-  args.splice(index, value === undefined ? 1 : 2);
-  return value ?? null;
+// One table per command: what it accepts, and whether it writes. A flag that
+// is not in the table is a usage error, not text — a typo'd flag used to be
+// folded silently into the message body and certified as success.
+const WRITE = "write";
+const READ = "read";
+
+const HELP = "try: message <text> [--work <ref>] [--from <session>] | work <ref> | roadmap <roadmap-key>";
+
+function valueFlag(name) {
+  return { name, kind: "value" };
 }
 
-function takeBoolean(args, name) {
-  const index = args.indexOf(name);
-  if (index < 0) return false;
-  args.splice(index, 1);
-  return true;
+function booleanFlag(name) {
+  return { name, kind: "boolean" };
+}
+
+const COMMANDS = {
+  init: { mode: WRITE, flags: [valueFlag("--expiry-ms"), valueFlag("--decay-ms")] },
+  message: {
+    mode: WRITE,
+    flags: [
+      valueFlag("--work"),
+      valueFlag("--from"),
+      valueFlag("--group"),
+      valueFlag("--status"),
+      valueFlag("--session"),
+      valueFlag("--to"),
+      valueFlag("--idle-timeout-ms"),
+      booleanFlag("--deliver"),
+    ],
+  },
+  observe: {
+    mode: WRITE,
+    flags: [valueFlag("--work"), valueFlag("--session"), valueFlag("--harness"), valueFlag("--directory")],
+  },
+  group: {
+    mode: WRITE,
+    flags: [],
+    subcommands: {
+      create: { help: "group create [name]" },
+      join: { help: "group join <group> <session>" },
+      messages: { help: "group messages <group>" },
+    },
+  },
+  ungroup: { mode: WRITE, flags: [] },
+  subscribe: { mode: WRITE, flags: [valueFlag("--session"), valueFlag("--work"), valueFlag("--to")] },
+  unsubscribe: { mode: WRITE, flags: [] },
+  subscriptions: { mode: READ, flags: [] },
+  groups: { mode: READ, flags: [] },
+  sessions: { mode: READ, flags: [] },
+  roadmap: { mode: READ, flags: [] },
+  work: { mode: READ, flags: [] },
+};
+
+class UsageError extends Error {}
+
+function usage(...lines) {
+  throw new UsageError(lines.join("\n"));
+}
+
+// `--flag value` and `--flag=value` both work; a bare `--` ends flags so a
+// body may legitimately begin with a dash. Repeated flags are a usage error
+// rather than a silent first-wins with the extra token leaking into text.
+function parseArgs(args, command) {
+  const accepted = new Map(command.flags.map((flag) => [flag.name, flag]));
+  const values = new Map();
+  const positional = [];
+  let flagsDone = false;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (flagsDone || token === "-" || !token.startsWith("-")) {
+      positional.push(token);
+      continue;
+    }
+    if (token === "--") {
+      flagsDone = true;
+      continue;
+    }
+    const separator = token.indexOf("=");
+    const name = separator > 0 ? token.slice(0, separator) : token;
+    const inline = separator > 0 ? token.slice(separator + 1) : undefined;
+    const flag = accepted.get(name);
+    if (!flag) {
+      const known = [...accepted.keys()].join(", ") || "none";
+      usage(`unknown flag · ${name}`, `${command.help}`, `flags: ${known}`);
+    }
+    if (values.has(name)) usage(`repeated flag · ${name}`, `${command.help}`);
+    if (flag.kind === "boolean") {
+      if (inline !== undefined) usage(`${name} takes no value`, `${command.help}`);
+      values.set(name, true);
+      continue;
+    }
+    const value = inline !== undefined ? inline : args[index + 1];
+    if (value === undefined || (inline === undefined && value.startsWith("--"))) {
+      usage(`${name} needs a value`, `${command.help}`);
+    }
+    if (inline === undefined) index++;
+    values.set(name, value);
+  }
+  return { values, positional };
+}
+
+// A number the caller can trust: "abc", "0ms", and "Infinity" are refused
+// instead of reaching a timer as NaN or a zero-length silence.
+function numericFlag(values, name, { minimum, help }) {
+  if (!values.has(name)) return null;
+  const raw = String(values.get(name)).trim();
+  const number = Number(raw);
+  if (raw === "" || !Number.isFinite(number) || number < minimum) {
+    usage(`${name} needs a number >= ${minimum}`, `${help}`);
+  }
+  return number;
 }
 
 function hideLocalState() {
@@ -51,77 +151,132 @@ function hideLocalState() {
   } catch {}
 }
 
-const args = process.argv.slice(2);
-const explicitState = takeFlag(args, "--state");
-const command = args.shift();
-const explicitRoot = explicitState ?? (command === "init" ? join(gitToplevel(process.cwd()) ?? process.cwd(), ".work-coordination") : null);
-const store = storeForTree(process.cwd(), explicitRoot);
+// `--state` is the one flag every command shares, so it is taken before the
+// command is known.
+function takeState(args) {
+  const index = args.indexOf("--state");
+  const inlineIndex = args.findIndex((token) => token.startsWith("--state="));
+  const at = index >= 0 ? index : inlineIndex;
+  if (at < 0) return { state: null, args };
+  const rest = [...args];
+  if (at === index && index >= 0) {
+    const value = rest[index + 1];
+    if (value === undefined || value.startsWith("--")) usage("--state needs a value", HELP);
+    rest.splice(index, 2);
+    return { state: value, args: rest };
+  }
+  const [token] = rest.splice(inlineIndex, 1);
+  const value = token.slice("--state=".length);
+  if (!value) usage("--state needs a value", HELP);
+  return { state: value, args: rest };
+}
 
-if (command === "init") {
-  hideLocalState();
-  // Expiry is opt-in per store and defaults to off (audit keeps everything).
-  // Plain `init` never touches an existing setting. --decay-ms is the
-  // pre-rename spelling and still works.
-  const expiryFlag = takeFlag(args, "--expiry-ms") ?? takeFlag(args, "--decay-ms");
-  let suffix = "";
-  if (expiryFlag !== null) {
-    const expiryMs = Number(expiryFlag);
-    saveStoreConfig(store.directory, { expiryMs: expiryMs > 0 ? expiryMs : null });
-    suffix = expiryMs > 0 ? ` · expiry ${expiryMs}ms` : " · expiry off";
+// A command's mode can depend on its subcommand: `group messages` only reads,
+// while `group create` and `group join` write.
+function modeFor(commandName, args) {
+  const command = COMMANDS[commandName];
+  if (!command) return READ;
+  if (command.subcommands) {
+    const action = args.find((token) => !token.startsWith("-"));
+    return action && action !== "messages" ? WRITE : READ;
   }
-  process.stdout.write(`initialized · ${store.directory}${suffix}\n`);
-} else if (command === "message") {
-  const workRef = takeFlag(args, "--work");
-  const sender = takeFlag(args, "--from");
-  const groupRef = takeFlag(args, "--group");
-  const status = takeFlag(args, "--status");
-  const session = takeFlag(args, "--session");
-  const deliver = takeBoolean(args, "--deliver");
-  const target = takeFlag(args, "--to");
-  const idleTimeout = takeFlag(args, "--idle-timeout-ms");
-  process.stdout.write(`${await sendAdvisory(store, { body: args.join(" "), workRef, sender, sessionRef: session, groupRef, status, deliver, target, idleTimeoutMs: idleTimeout })}\n`);
-} else if (command === "group") {
-  const action = args.shift();
-  if (action === "create") {
-    process.stdout.write(`${createGroupOp(store, args.join(" "))}\n`);
-  } else if (action === "join") {
-    process.stdout.write(`${joinGroupOp(store, args.shift(), args.join(" "))}\n`);
-  } else if (action === "messages") {
-    process.stdout.write(`${groupMessagesOp(store, args.join(" "))}\n`);
+  return command.mode;
+}
+
+async function run(commandName, args, explicitState) {
+  const command = COMMANDS[commandName];
+  const help = command.help ?? `work-coordination ${commandName}`;
+  const { values, positional } = parseArgs(args, { ...command, help });
+  const mode = modeFor(commandName, positional);
+
+  // Read-only commands resolve the store without creating it: a typo'd
+  // --state path must not become a directory, and a question must not
+  // conjure a store.
+  const store = storeForTree(process.cwd(), explicitState ?? (commandName === "init" ? join(gitToplevel(process.cwd()) ?? process.cwd(), ".work-coordination") : null), null, { create: mode === WRITE });
+
+  const value = (name) => (values.has(name) ? values.get(name) : null);
+
+  if (commandName === "init") {
+    hideLocalState();
+    // Expiry is opt-in per store and defaults to off (audit keeps
+    // everything). Plain `init` never touches an existing setting.
+    // --decay-ms is the pre-rename spelling and still works.
+    const expiryFlag = values.has("--expiry-ms") ? "--expiry-ms" : (values.has("--decay-ms") ? "--decay-ms" : null);
+    let suffix = "";
+    if (expiryFlag) {
+      const expiryMs = numericFlag(values, expiryFlag, { minimum: 0, help });
+      saveStoreConfig(store.directory, { expiryMs: expiryMs > 0 ? expiryMs : null });
+      suffix = expiryMs > 0 ? ` · expiry ${expiryMs}ms` : " · expiry off";
+    }
+    return `initialized · ${store.directory}${suffix}`;
+  }
+
+  if (commandName === "message") {
+    const idleTimeout = values.has("--idle-timeout-ms")
+      ? numericFlag(values, "--idle-timeout-ms", { minimum: 1, help })
+      : undefined;
+    return await sendAdvisory(store, {
+      body: positional.join(" "),
+      workRef: value("--work"),
+      sender: value("--from"),
+      sessionRef: value("--session"),
+      groupRef: value("--group"),
+      status: value("--status"),
+      deliver: values.get("--deliver") ?? false,
+      target: value("--to"),
+      idleTimeoutMs: idleTimeout,
+    });
+  }
+
+  if (commandName === "group") {
+    const action = positional.shift();
+    if (action === "create") return createGroupOp(store, positional.join(" "));
+    if (action === "join") return joinGroupOp(store, positional.shift(), positional.join(" "));
+    if (action === "messages") return groupMessagesOp(store, positional.join(" "));
+    return "nothing to do — try: group create [name] | group join <group> <session> | group messages <group>";
+  }
+
+  if (commandName === "ungroup") {
+    return removeGroup(store, positional.join(" ")) ? "group removed" : "group unavailable";
+  }
+
+  if (commandName === "subscribe") {
+    return subscribeOp(store, { sessionRef: value("--session"), workRef: value("--work"), target: value("--to") });
+  }
+
+  if (commandName === "unsubscribe") return unsubscribeOp(store, positional.join(" "));
+  if (commandName === "subscriptions") return listSubscriptionsOp(store);
+  if (commandName === "groups") return listGroups(store);
+  if (commandName === "sessions") return listSessions(store);
+  if (commandName === "observe") {
+    return observe(store, {
+      workRef: value("--work"),
+      sessionRef: value("--session"),
+      harness: value("--harness"),
+      directory: value("--directory") ?? process.cwd(),
+      worktree: gitToplevel(process.cwd()),
+    });
+  }
+  if (commandName === "roadmap") return roadmapViewFor(store, positional.join(" "));
+  if (commandName === "work") return showWork(store, positional.join(" "));
+  return `nothing to do — ${HELP}`;
+}
+
+const argv = process.argv.slice(2);
+const { state, args: withoutState } = takeState(argv);
+const commandName = withoutState[0];
+try {
+  if (!commandName || !COMMANDS[commandName]) {
+    if (commandName && commandName.startsWith("-")) usage(`unknown flag · ${commandName}`, HELP);
+    process.stdout.write(`nothing to do — ${HELP}\n`);
   } else {
-    process.stdout.write("nothing to do — try: group create [name] | group join <group> <session> | group messages <group>\n");
+    process.stdout.write(`${await run(commandName, withoutState.slice(1), state)}\n`);
   }
-} else if (command === "ungroup") {
-  process.stdout.write(removeGroup(store, args.join(" ")) ? "group removed\n" : "group unavailable\n");
-} else if (command === "subscribe") {
-  const session = takeFlag(args, "--session");
-  const work = takeFlag(args, "--work");
-  const target = takeFlag(args, "--to");
-  process.stdout.write(`${subscribeOp(store, { sessionRef: session, workRef: work, target })}\n`);
-} else if (command === "unsubscribe") {
-  process.stdout.write(`${unsubscribeOp(store, args.join(" "))}\n`);
-} else if (command === "subscriptions") {
-  process.stdout.write(`${listSubscriptionsOp(store)}\n`);
-} else if (command === "groups") {
-  process.stdout.write(`${listGroups(store)}\n`);
-} else if (command === "sessions") {
-  process.stdout.write(`${listSessions(store)}\n`);
-} else if (command === "observe") {
-  const workRef = takeFlag(args, "--work");
-  const sessionRef = takeFlag(args, "--session");
-  const harness = takeFlag(args, "--harness");
-  const directory = takeFlag(args, "--directory") ?? process.cwd();
-  process.stdout.write(`${observe(store, { workRef, sessionRef, harness, directory, worktree: gitToplevel(process.cwd()) })}\n`);
-} else if (command === "roadmap") {
-  const roadmapKey = args.join(" ");
-  try {
-    const item = readRoadmapItem(roadmapKey);
-    process.stdout.write(`${renderRoadmapView(roadmapView(store, item))}\n`);
-  } catch {
-    process.stdout.write("roadmap unavailable — local read failed; coordination remains advisory-only.\n");
+} catch (error) {
+  if (error instanceof UsageError) {
+    process.stdout.write(`${error.message}\n`);
+  } else {
+    process.stdout.write(`error · ${error?.message ?? error}\n`);
   }
-} else if (command === "work") {
-  process.stdout.write(`${showWork(store, args.join(" "))}\n`);
-} else {
-  process.stdout.write("nothing to do — try: message <text> [--work <ref>] [--from <session>] | work <ref> | roadmap <roadmap-key>\n");
+  process.exitCode = 1;
 }

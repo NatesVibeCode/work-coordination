@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { resolveTree, visibleTrees } from "./config.mjs";
+import { missingTree, resolveTree, visibleTrees } from "./config.mjs";
 import { storeForTree } from "../../src/operations.mjs";
 
 // Runs an operation against a tree's store in-process: no CLI on PATH, no
@@ -10,9 +10,16 @@ import { storeForTree } from "../../src/operations.mjs";
 // operation.
 export async function runOp(config, treeName, operation) {
   const tree = resolveTree(config, treeName);
-  if (!tree) return { ok: false, output: "tree unavailable" };
+  if (!tree) {
+    // A declared tree whose root is gone says why, instead of looking like a
+    // misspelled tree name.
+    const absent = missingTree(config, treeName);
+    if (absent) return { ok: false, output: `unavailable · root missing · ${absent.root}` };
+    return { ok: false, output: "tree unavailable" };
+  }
   try {
-    const output = String(await operation(storeForTree(tree.root, null, join(tree.root, ".work-coordination")), tree) ?? "").trimEnd();
+    const fallback = tree.state ?? join(tree.root, ".work-coordination");
+    const output = String(await operation(storeForTree(tree.root, tree.state, fallback), tree) ?? "").trimEnd();
     return { ok: true, output: output || "(no output)" };
   } catch (error) {
     const detail = String(error?.message ?? error).trim();
@@ -21,5 +28,9 @@ export async function runOp(config, treeName, operation) {
 }
 
 export function treeNames(config) {
-  return visibleTrees(config);
+  const visible = visibleTrees(config);
+  const absent = (config.missing ?? [])
+    .filter((entry) => entry.visible !== false)
+    .map((entry) => `${entry.name} · unavailable · root missing · ${entry.root}`);
+  return [...visible, ...absent];
 }

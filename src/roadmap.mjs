@@ -1,8 +1,18 @@
 import { execFileSync } from "node:child_process";
+import { oneLine } from "./coordination.mjs";
 import { workView } from "./work-index.mjs";
 
 function text(value) {
-  return String(value ?? "").trim() || null;
+  return oneLine(value) || null;
+}
+
+// Reading a roadmap item is optional local infrastructure: it runs whatever
+// `psql` command the operator has, against their own database. Nothing here
+// is required for coordination, and a missing command degrades to a clean
+// one-liner rather than a raw spawn error.
+export function roadmapCommand() {
+  const configured = String(process.env.WORK_COORDINATION_ROADMAP_PSQL ?? "").trim();
+  return configured || "psql";
 }
 
 // roadmapView is deliberately read-only. It projects observed participation
@@ -22,14 +32,17 @@ export function roadmapView(store, item = {}) {
   };
 }
 
-export function readRoadmapItem(roadmapKey, { run = (args) => execFileSync("psql", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) } = {}) {
+export function readRoadmapItem(roadmapKey, { run = null, command = roadmapCommand() } = {}) {
   const key = text(roadmapKey);
   if (!key) return null;
   const literal = key.replaceAll("'", "''");
-  const output = String(run([
-    "praxis", "-At", "-F", "\t", "-c",
+  const args = [
+    ...(/[\\/\s]/.test(command) ? command.split(/\s+/) : [command]),
+    "-At", "-F", "\t", "-c",
     `select roadmap_key, title, priority, lifecycle, status from roadmap_items where roadmap_key = '${literal}' limit 1;`,
-  ]) ?? "").trim();
+  ];
+  const execute = run ?? ((argv) => execFileSync(argv[0], argv.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  const output = String(execute(args) ?? "").trim();
   if (!output) return null;
   const [roadmapKeyValue, title, priority, lifecycle, status] = output.split("\t");
   if (!text(roadmapKeyValue)) return null;
@@ -45,11 +58,21 @@ export function readRoadmapItem(roadmapKey, { run = (args) => execFileSync("psql
 export function renderRoadmapView(view) {
   if (!view) return "roadmap item unavailable";
   const summary = [
-    `Roadmap · ${view.roadmapKey}`,
-    view.title ?? "title unavailable",
-    [view.priority, view.lifecycle, view.status].filter(Boolean).join(" · ") || "roadmap state unavailable",
-    `participants · ${view.participants.length ? view.participants.map((value) => value.sessionRef).join(", ") : "none observed"}`,
+    `Roadmap · ${oneLine(view.roadmapKey) || "unknown"}`,
+    oneLine(view.title) || "title unavailable",
+    [view.priority, view.lifecycle, view.status].map(oneLine).filter(Boolean).join(" · ") || "roadmap state unavailable",
+    `participants · ${view.participants.length ? view.participants.map((value) => oneLine(value.sessionRef)).join(", ") : "none observed"}`,
     "advisory — presence only; no assignment, lock, or completion state.",
   ];
   return summary.join("\n");
+}
+
+// The CLI and the MCP tool both read one item then render it; the roadmap
+// source is optional, so a failure is a line of text, never a throw.
+export function roadmapViewFor(store, roadmapKey) {
+  try {
+    return renderRoadmapView(roadmapView(store, readRoadmapItem(roadmapKey)));
+  } catch {
+    return "roadmap unavailable — local read failed; coordination remains advisory-only.";
+  }
 }

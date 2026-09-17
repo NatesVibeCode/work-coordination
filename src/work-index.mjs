@@ -1,5 +1,6 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { textField } from "./coordination.mjs";
 import { expiryCutoff } from "./state.mjs";
 
 function text(value) {
@@ -56,14 +57,14 @@ function load(store) {
 }
 
 export function observeParticipation(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
-  const sessionRef = text(input.sessionRef) ?? `session_${String(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local"}`;
+  const sessionRef = textField(input.sessionRef) ?? `session_${String(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local"}`;
   const record = {
-    workRef: text(input.workRef),
+    workRef: textField(input.workRef),
     sessionRef,
-    harness: text(input.harness),
-    directory: text(input.directory),
-    worktree: text(input.worktree),
-    title: text(input.title),
+    harness: textField(input.harness),
+    directory: textField(input.directory),
+    worktree: textField(input.worktree),
+    title: textField(input.title),
     observedAt: Number(now),
   };
   appendFileSync(logPath(store), `${JSON.stringify(record)}\n`, { mode: 0o600 });

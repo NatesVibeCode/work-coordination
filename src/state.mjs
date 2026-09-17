@@ -1,8 +1,8 @@
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { activeGroup, createMessage, renderMessage } from "./coordination.mjs";
+import { activeGroup, createMessage, oneLine, renderMessage } from "./coordination.mjs";
 import { NO_WRITE, reviseJsonFile } from "./atomic-json.mjs";
-import { deliverMessage } from "./delivery.mjs";
+import { deliverMessage, mapBounded } from "./delivery.mjs";
 
 function ensure(directory) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -19,9 +19,17 @@ function writeJson(path, value) {
   renameSync(temporary, path);
 }
 
+let idCounter = 0;
+
+// A record's file name is its id, so an id that repeats silently overwrites a
+// record. The default source is a fresh Math.random float; a caller that
+// injects its own source is a test seam whose short values must stay
+// byte-identical, so only the default gains the uniqueness tail.
 function id(prefix, random) {
   const suffix = String(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local";
-  return `${prefix}_${suffix}`;
+  if (random !== Math.random) return `${prefix}_${suffix}`;
+  idCounter = (idCounter + 1) % Number.MAX_SAFE_INTEGER;
+  return `${prefix}_${suffix.slice(0, 8)}${Date.now().toString(36)}${idCounter.toString(36)}`;
 }
 
 export function loadStoreConfig(directory) {
@@ -48,12 +56,29 @@ export function expiryCutoff(store, now = Date.now()) {
   return typeof expiryMs === "number" && expiryMs > 0 ? now - expiryMs : null;
 }
 
+// Two ways to name a store. `createState` is for writers and `init`: it
+// brings the store into existence. `loadState` is for readers: it resolves
+// the same paths and reads the same config, but creates nothing, so asking a
+// question never leaves a directory behind.
+function storeAt(directory) {
+  return {
+    directory,
+    messages: join(directory, "messages"),
+    groups: join(directory, "groups.json"),
+    subscriptions: join(directory, "subscriptions.json"),
+    config: loadStoreConfig(directory),
+  };
+}
+
 export function createState(root) {
   const directory = String(root);
-  const messages = join(directory, "messages");
   ensure(directory);
-  ensure(messages);
-  return { directory, messages, groups: join(directory, "groups.json"), subscriptions: join(directory, "subscriptions.json"), config: loadStoreConfig(directory) };
+  ensure(join(directory, "messages"));
+  return storeAt(directory);
+}
+
+export function loadState(root) {
+  return storeAt(String(root));
 }
 
 export function sendMessage(store, input = {}, options = {}) {
@@ -69,10 +94,20 @@ export function sendMessage(store, input = {}, options = {}) {
   return persist();
 }
 
+// A store that was never created has no messages directory; reading it is an
+// empty answer, not an error. Writers create the store before they get here.
+function messageFiles(store) {
+  try {
+    return readdirSync(store.messages, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
 function messagesMatching(store, field, value, cutoff = expiryCutoff(store)) {
   const needle = String(value ?? "");
   const kept = [];
-  for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
+  for (const entry of messageFiles(store)) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const message = readJson(join(store.messages, entry.name), null);
     if (!message) continue;
@@ -94,7 +129,7 @@ export function rawMessagesForWork(store, workRef) {
 function pruneExpiredMessages(store) {
   const cutoff = expiryCutoff(store);
   if (cutoff === null) return;
-  for (const entry of readdirSync(store.messages, { withFileTypes: true })) {
+  for (const entry of messageFiles(store)) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(store.messages, entry.name);
     const message = readJson(path, null);
@@ -164,8 +199,8 @@ function foldMembers(store, group) {
 
 export function createGroup(store, input = {}, { now = Date.now(), random = Math.random, ttlMs = 60 * 60 * 1000 } = {}) {
   const group = {
-    id: String(input.id ?? "").trim() || id("g", random),
-    name: String(input.name ?? "").trim() || null,
+    id: oneLine(input.id) || id("g", random),
+    name: oneLine(input.name) || null,
     members: [],
     createdAt: Number(now),
     expiresAt: Number(now) + Math.max(0, Number(ttlMs) || 0),
@@ -177,10 +212,16 @@ export function createGroup(store, input = {}, { now = Date.now(), random = Math
   return group;
 }
 
+// A join is refused for a group that is no longer addressable: missing, past
+// its TTL, or past the retention window. Membership is append-only and the
+// append is one atomic write, never a read-modify-write, so concurrent joins
+// cannot lose each other and nothing ever waits.
 export function joinGroup(store, groupId, sessionRef, options = {}) {
+  const current = groupState(store, groupId, options);
+  if (current !== "active") return null;
   const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
   if (!record) return null;
-  const member = String(sessionRef ?? "").trim();
+  const member = oneLine(sessionRef);
   if (member) {
     appendFileSync(memberLogPath(store), `${JSON.stringify({ group: record.id, member, at: Number(options?.now ?? Date.now()) })}\n`, { mode: 0o600 });
   }
@@ -253,13 +294,13 @@ function loadSubscriptions(store) {
 }
 
 export function subscribe(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
-  const sessionRef = String(input.sessionRef ?? "").trim() || null;
-  const target = String(input.target ?? "").trim();
+  const sessionRef = oneLine(input.sessionRef) || null;
+  const target = oneLine(input.target);
   const [harness, ...rest] = target.split(":");
   const targetHarness = harness.trim().toLowerCase() || null;
   const targetSession = rest.join(":").trim() || null;
   if (!sessionRef || !targetHarness || !targetSession) return null;
-  const workRef = String(input.workRef ?? "").trim() || null;
+  const workRef = oneLine(input.workRef) || null;
   let result;
   reviseJsonFile(store.subscriptions, [], (value) => {
     const subscriptions = Array.isArray(value) ? value : [];
@@ -269,7 +310,7 @@ export function subscribe(store, input = {}, { now = Date.now(), random = Math.r
       return NO_WRITE;
     }
     const subscription = {
-      id: String(input.id ?? "").trim() || id("s", random),
+      id: oneLine(input.id) || id("s", random),
       sessionRef,
       workRef,
       targetHarness,
@@ -304,7 +345,11 @@ export function listSubscriptions(store) {
 
 const FANOUT_STATUSES = ["blocked", "done"];
 
-export async function notifySubscribers(store, message = {}, { spawnFn, idleTimeoutMs } = {}) {
+// A fan-out must never turn one unreachable target into a wall the others
+// wait behind: each delivery has its own idle timeout, and N of them run
+// together instead of end to end. Results keep the order they were built in,
+// so callers render a stable list.
+export async function notifySubscribers(store, message = {}, { spawnFn, idleTimeoutMs, concurrency = 8 } = {}) {
   const status = String(message.status ?? "").trim().toLowerCase();
   const sessionRef = String(message.sessionRef ?? "").trim();
   if (!FANOUT_STATUSES.includes(status) || !sessionRef) return [];
@@ -313,7 +358,7 @@ export async function notifySubscribers(store, message = {}, { spawnFn, idleTime
   const options = {};
   if (spawnFn !== undefined) options.spawnFn = spawnFn;
   if (idleTimeoutMs !== undefined) options.idleTimeoutMs = idleTimeoutMs;
-  const results = [];
+  const pending = [];
   const notified = new Set();
   for (const value of loadSubscriptions(store)) {
     if (value.sessionRef !== sessionRef) continue;
@@ -321,8 +366,11 @@ export async function notifySubscribers(store, message = {}, { spawnFn, idleTime
     const target = `${value.targetHarness}:${value.targetSession}`;
     if (notified.has(target)) continue;
     notified.add(target);
-    const result = await deliverMessage({ harness: value.targetHarness, sessionRef: value.targetSession, message: rendered }, options);
-    results.push({ subscriptionId: value.id, target, ...result });
+    pending.push({ subscriptionId: value.id, target, harness: value.targetHarness, sessionRef: value.targetSession });
   }
-  return results;
+  return mapBounded(pending, concurrency, async (entry) => ({
+    subscriptionId: entry.subscriptionId,
+    target: entry.target,
+    ...(await deliverMessage({ harness: entry.harness, sessionRef: entry.sessionRef, message: rendered }, options)),
+  }));
 }

@@ -18,6 +18,8 @@ import {
   subscribeOp,
   unsubscribeOp,
 } from "../../src/operations.mjs";
+import { roadmapViewFor } from "../../src/roadmap.mjs";
+import { removeGroup } from "../../src/state.mjs";
 import { runOp, treeNames } from "./runner.mjs";
 
 export function buildServer(config) {
@@ -149,6 +151,27 @@ server.registerTool("subscriptions", {
   description: "List lane subscriptions in one filetree.",
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listSubscriptionsOp(store))));
+
+// ungroup is the other half of group_create: an ephemeral group ends when
+// someone says so, not only when its TTL runs out.
+server.registerTool("ungroup", {
+  description: "Remove an ephemeral group; its member log is pruned with it.",
+  inputSchema: {
+    tree: Tree,
+    group: z.string(),
+  },
+}, async ({ tree, group }) => text(await run(tree, (store) => (removeGroup(store, group) ? "group removed" : "group unavailable"))));
+
+// roadmap is read-only and optional: it overlays observed local participation
+// beside one roadmap row when the operator has a roadmap database configured,
+// and degrades to a line of text when they do not.
+server.registerTool("roadmap", {
+  description: "Read one roadmap item and overlay observed local participation. Read-only; optional local infrastructure.",
+  inputSchema: {
+    tree: Tree,
+    ref: z.string(),
+  },
+}, async ({ tree, ref }) => text(await run(tree, (store) => roadmapViewFor(store, ref))));
 
   return server;
 }

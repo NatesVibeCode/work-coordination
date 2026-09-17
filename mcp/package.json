@@ -2,10 +2,17 @@
   "name": "work-coordination-mcp",
   "version": "0.1.0",
   "description": "MCP server exposing work-coordination as tools, with per-filetree visibility",
+  "private": true,
+  "license": "SEE LICENSE IN ../LICENSE",
   "type": "module",
   "bin": {
     "work-coordination-mcp": "./src/index.mjs"
   },
+  "files": [
+    "src",
+    "README.md",
+    "config.example.json"
+  ],
   "scripts": {
     "test": "node --test"
   },

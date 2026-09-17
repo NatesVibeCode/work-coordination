@@ -1,3 +1,5 @@
 node_modules/
 .DS_Store
 .repo-boundary.json
+# A tree config holds absolute paths for one machine; only the example ships.
+mcp/config.json

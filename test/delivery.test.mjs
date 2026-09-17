@@ -8,11 +8,15 @@ const message = "Session message · #m_7k3p\nadvisory — use if relevant; other
 function fakeChild({ hang = false, exitCode = 0 } = {}) {
   const killed = [];
   const child = new EventEmitter();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  child.kill = () => { killed.push(true); child.emit("close", null); };
+  // The transport now finishes on `exit` (a grandchild holding an inherited
+  // pipe must never stall the report), so the stub emits exit, not close, and
+  // its pipes behave like destroyable streams.
+  child.stdout = Object.assign(new EventEmitter(), { destroy() {} });
+  child.stderr = Object.assign(new EventEmitter(), { destroy() {} });
+  child.unref = () => {};
+  child.kill = () => { killed.push(true); child.emit("exit", null); };
   child.killed = killed;
-  if (!hang) queueMicrotask(() => child.emit("close", exitCode));
+  if (!hang) queueMicrotask(() => child.emit("exit", exitCode));
   return child;
 }
 
@@ -118,7 +122,7 @@ test("transport activity resets the idle timeout", async () => {
     idleTimeoutMs: 60,
   });
   const heartbeat = setInterval(() => child.stdout.emit("data", Buffer.from("tick")), 15);
-  setTimeout(() => { clearInterval(heartbeat); child.emit("close", 0); }, 100);
+  setTimeout(() => { clearInterval(heartbeat); child.emit("exit", 0); }, 100);
   const result = await pending;
 
   assert.equal(result.delivered, true);

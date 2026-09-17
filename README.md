@@ -18,9 +18,29 @@ typed work
 
 A harness is a port into work. It can launch, join, observe, or contribute a message. It is not the center of the model.
 
+## Quickstart
+
+```sh
+npm link                          # puts `work-coordination` on your PATH
+cd /path/to/your/repo
+work-coordination init            # creates .work-coordination/ here, private
+work-coordination observe --work "Ticket T-123" --session codex:one --harness codex
+work-coordination message "Tokenizer now returns spans." \
+  --work "Ticket T-123" --from "Codex / parser-repair" --status milestone
+work-coordination work "Ticket T-123"   # participants + what they said
+```
+
+That is the whole loop: declare presence, say something advisory, read it back.
+Nothing here assigns, blocks, or controls another session, and a read-only
+command never creates state — so asking a question is always safe.
+
+Driving this from an agent? `skills/work-coordination/` is the playbook for it
+(when to use it, the four moves, the hard rules, and the syntax that is easy to
+get wrong).
+
 ## What exists now
 
-- Local private state (`0700` directories, `0600` files, atomic replacement, and serialized local mutations).
+- Local private state (`0700` directories, `0600` files, atomic replacement, and lock-free optimistic concurrency — a contended update retries and then fails loudly; nothing ever locks, leases, or waits).
 - Work views that collect observed session participation under a typed work reference.
 - Read-only roadmap views that overlay those observations beside one live `roadmap_items` row; they cannot write roadmap state or control a session.
 - Ephemeral groups with expiry.
@@ -88,8 +108,9 @@ work-coordination \
   work "Ticket T-123"
 
 # Read one live roadmap item and overlay only observed local participation.
+# Optional: this needs your own psql and a roadmap_items table. See below.
 work-coordination \
-  roadmap roadmap.boat.foundation.architecture_contracts.v1
+  roadmap <your-roadmap-key>
 
 work-coordination \
   sessions
@@ -139,14 +160,36 @@ work-coordination \
 ```
 
 New subscribers miss already-sent reports (fan-out is live, never replayed).
-Catch up with `work "<ref>"` and `subscriptions` — every message persists.
+Catch up with `work "<ref>"` and `subscriptions`. With no retention window set
+(the default) every message persists for audit; a store that opted into
+[expiry](#expiry-optional) forgets records older than its window.
 
 `observe` is the adapter seam. A future typed-workflow or native harness adapter calls it with what it observed. It does not ask an agent to self-report or name its own work.
 
 ## Verify
 
+The root suite covers the CLI, the operations layer, and the store. The MCP
+protocol suite additionally needs the MCP SDK, and `mcp/node_modules` is not
+committed, so a fresh clone has to install it first:
+
 ```sh
-npm test
+npm test                       # CLI + operations + store
+cd mcp && npm install && npm test && cd ..   # + the MCP protocol suite
+```
+
+Without that install the MCP protocol file reports itself as **skipped**, with
+the reason and the command to fix it. A green root run therefore never implies
+MCP coverage it did not get.
+
+## Roadmap reads (optional)
+
+`roadmap <key>` reads one row from a `roadmap_items` table and overlays local
+observed participation beside it. That is optional local infrastructure, not a
+dependency: it runs whatever psql command you point it at, and if there is no
+database it says `roadmap unavailable` and coordination continues normally.
+
+```sh
+WORK_COORDINATION_ROADMAP_PSQL="psql mydb" work-coordination roadmap <key>
 ```
 
 ## Expiry (optional)
@@ -184,11 +227,30 @@ keeps everything for audit — that is the default. Two things to know:
 
 - `mcp/` — an MCP server exposing these operations as tree-scoped tools
   with per-tree visibility config. It calls `src/operations.mjs` in-process —
-  the same layer the CLI uses — so it needs nothing installed. See
-  `mcp/README.md`.
+  the same layer the CLI uses. See `mcp/README.md`. (The server has no
+  runtime install of its own; only its test suite needs the SDK.)
 - `work-seam.dag.json` — the shared vocabulary between this package and the
-  `harness-handoff` contracts. The drift test (`npm test`) fails if the two
-  drift apart.
+  `harness-handoff` contracts. `npm test` checks the two against each other
+  when `harness-handoff` is checked out as a sibling; without that checkout
+  the check reports itself as skipped rather than green, and
+  `WORK_COORDINATION_HANDOFF_CONTRACT` points it at a copy elsewhere.
+- `skills/work-coordination/` — the agent-facing playbook: `SKILL.md` plus
+  `references/` for the CLI contract, the coordination model, and MCP setup.
+  Install it as `<workspace>/.agents/skills/work-coordination/`, the same
+  layout the fleet skills use. `npm test` checks every command and flag it
+  shows against the CLI's own table, so it cannot drift into fiction.
+
+## Known limits
+
+- Delivery is best-effort through local harness CLIs (`codex`, `pi`,
+  `hermes`). A send that stalls past its idle timeout is reported, never
+  fatal, and never blocks the other recipients.
+- Concurrency is lock-free: a contended write retries and, if it still
+  cannot land, reports a conflict. Nothing waits on a lock, because there
+  are none to wait on.
+- Roadmap reads need your own psql and table (above); they are read-only.
+- Group membership and observations are append-only logs; removal of a group
+  prunes its log, and expiry reclaims stale message files.
 
 ## License
 

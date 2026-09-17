@@ -2,8 +2,24 @@ function text(value) {
   return String(value ?? "").trim();
 }
 
+// Every rendered record is one line per record, so a field carrying a newline
+// (or any other control character) could forge a line that reads like a real
+// record — a second session, a second message header. Anything user-supplied
+// is folded to a single line before it is stored and before it is rendered,
+// so identity fields, work refs, and bodies can never inject structure.
+export function oneLine(value) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function textField(value) {
+  return oneLine(value) || null;
+}
+
 function optionalText(value) {
-  return text(value) || null;
+  return textField(value);
 }
 
 export const MESSAGE_STATUSES = ["started", "milestone", "blocked", "done"];
@@ -24,7 +40,7 @@ export function createMessage(input = {}, { now = Date.now(), random = Math.rand
     sessionRef: optionalText(input.sessionRef),
     groupRef: optionalText(input.groupRef),
     status: validStatus(input.status),
-    body: text(input.body),
+    body: oneLine(input.body),
     advisory: true,
   };
 }
@@ -39,7 +55,7 @@ export function renderMessage(message = {}) {
   const context = workRef
     ? `${workRef}${sender ? ` · from ${sender}` : ""}`
     : sender ? `from ${sender}` : "";
-  return [heading, context, sessionRef ? `session · ${sessionRef}` : "", status ? `status · ${status}` : "", "advisory — use if relevant; otherwise continue.", text(message.body)]
+  return [heading, context, sessionRef ? `session · ${sessionRef}` : "", status ? `status · ${status}` : "", "advisory — use if relevant; otherwise continue.", oneLine(message.body)]
     .filter((line) => line !== "")
     .join("\n");
 }

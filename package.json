@@ -2,10 +2,18 @@
   "name": "work-coordination",
   "version": "0.1.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "files": [
     "bin",
     "src",
-    "README.md"
+    "mcp/src",
+    "mcp/package.json",
+    "mcp/README.md",
+    "mcp/config.example.json",
+    "skills",
+    "work-seam.dag.json",
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "engines": {

@@ -1,6 +1,7 @@
 {
   "trees": [
-    { "name": "work-coordination", "root": "/Users/nate/Public Repos/work-coordination", "visible": true },
-    { "name": "mdview", "root": "/Users/nate/Public Repos/mdview", "visible": true }
+    { "name": "work-coordination", "root": "..", "visible": true },
+    { "name": "sibling-repo", "root": "../your-other-repo", "visible": true },
+    { "name": "scratch", "root": "~/trees/scratch", "visible": false }
   ]
 }

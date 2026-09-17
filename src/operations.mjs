@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { renderMessage } from "./coordination.mjs";
+import { oneLine, renderMessage } from "./coordination.mjs";
 import { deliverMessage } from "./delivery.mjs";
 import { deliverGroupMessage } from "./group-delivery.mjs";
 import { allObservations, observeParticipation, observedSessions, workView } from "./work-index.mjs";
@@ -13,6 +13,7 @@ import {
   groupState,
   joinGroup,
   listSubscriptions,
+  loadState,
   messagesForGroup,
   messagesForWork,
   notifySubscribers,
@@ -50,9 +51,16 @@ export function gitToplevel(start) {
 // directory (the CLI --state flag) wins over both. The CLI keeps the home
 // fallback; the MCP server passes a tree-local fallback so a tree without
 // its own store still never reads or writes outside the declared root.
-export function storeForTree(treeRoot, explicitStateDir = null, fallbackDir = null) {
-  const root = explicitStateDir ?? localState(treeRoot) ?? fallbackDir ?? join(homedir(), ".work-coordination");
-  return createState(root);
+export function storeDirectoryForTree(treeRoot, explicitStateDir = null, fallbackDir = null) {
+  return explicitStateDir ?? localState(treeRoot) ?? fallbackDir ?? join(homedir(), ".work-coordination");
+}
+
+// `create` decides whether resolving a store may bring it into existence.
+// A read-only command resolves the same way but must not create anything —
+// not a missing store, and not a directory a typo named.
+export function storeForTree(treeRoot, explicitStateDir = null, fallbackDir = null, { create = true } = {}) {
+  const root = storeDirectoryForTree(treeRoot, explicitStateDir, fallbackDir);
+  return create ? createState(root) : loadState(root);
 }
 
 export function observe(store, { workRef, sessionRef, harness, directory, worktree } = {}) {
@@ -85,7 +93,7 @@ export async function sendAdvisory(store, { body, workRef, sender, sessionRef, g
 
 export function listSessions(store) {
   const sessions = observedSessions(store);
-  return sessions.length ? sessions.map((value) => `${value.sessionRef}${value.workRef ? ` · ${value.workRef}` : ""}`).join("\n") : "no sessions observed";
+  return sessions.length ? sessions.map((value) => `${oneLine(value.sessionRef)}${value.workRef ? ` · ${oneLine(value.workRef)}` : ""}`).join("\n") : "no sessions observed";
 }
 
 export function showWork(store, workRef) {
@@ -93,8 +101,8 @@ export function showWork(store, workRef) {
   const messages = messagesForWork(store, workRef);
   const participants = view?.participants ?? [];
   if (participants.length || messages.length) {
-    const header = `Work · ${workRef || "unknown"}`;
-    const people = participants.length ? participants.map((value) => value.sessionRef).join(", ") : "none observed";
+    const header = `Work · ${oneLine(workRef) || "unknown"}`;
+    const people = participants.length ? participants.map((value) => oneLine(value.sessionRef)).join(", ") : "none observed";
     const rendered = messages.length ? messages.map(renderMessage).join("\n\n") : "no messages observed";
     return `${header}\nparticipants · ${people}\n\n${rendered}`;
   }
@@ -105,18 +113,18 @@ export function showWork(store, workRef) {
 
 export function listGroups(store) {
   const groups = activeGroups(store);
-  return groups.length ? groups.map((group) => `${group.id}${group.name ? ` · ${group.name}` : ""} · ${group.members.join(", ")}`).join("\n") : "no active groups";
+  return groups.length ? groups.map((group) => `${oneLine(group.id)}${group.name ? ` · ${oneLine(group.name)}` : ""} · ${group.members.map(oneLine).join(", ")}`).join("\n") : "no active groups";
 }
 
 export function createGroupOp(store, name) {
   const group = createGroup(store, { name });
-  return `${group.id}${group.name ? ` · ${group.name}` : ""}`;
+  return `${oneLine(group.id)}${group.name ? ` · ${oneLine(group.name)}` : ""}`;
 }
 
 export function joinGroupOp(store, groupId, sessionRef) {
   if (groupState(store, groupId) === "expired") return "group expired";
   const group = joinGroup(store, groupId, sessionRef);
-  return group ? `${group.id} · ${group.members.join(", ")}` : "group unavailable";
+  return group ? `${oneLine(group.id)} · ${group.members.map(oneLine).join(", ")}` : "group unavailable";
 }
 
 export function groupMessagesOp(store, groupRef) {
@@ -127,7 +135,7 @@ export function groupMessagesOp(store, groupRef) {
 
 export function subscribeOp(store, { sessionRef, workRef, target } = {}) {
   const subscription = subscribe(store, { sessionRef, workRef, target });
-  return subscription ? `subscribed · ${subscription.id}` : "subscription unavailable";
+  return subscription ? `subscribed · ${oneLine(subscription.id)}` : "subscription unavailable";
 }
 
 export function unsubscribeOp(store, subscriptionId) {
@@ -137,5 +145,5 @@ export function unsubscribeOp(store, subscriptionId) {
 
 export function listSubscriptionsOp(store) {
   const subscriptions = listSubscriptions(store);
-  return subscriptions.length ? subscriptions.map((value) => `${value.id} · ${value.sessionRef}${value.workRef ? ` · ${value.workRef}` : ""} → ${value.targetHarness}:${value.targetSession}`).join("\n") : "no subscriptions";
+  return subscriptions.length ? subscriptions.map((value) => `${oneLine(value.id)} · ${oneLine(value.sessionRef)}${value.workRef ? ` · ${oneLine(value.workRef)}` : ""} → ${oneLine(value.targetHarness)}:${oneLine(value.targetSession)}`).join("\n") : "no subscriptions";
 }

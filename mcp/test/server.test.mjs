@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { loadConfig, resolveTree, visibleTrees } from "../src/config.mjs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { loadConfig, missingTree, resolveConfigPath, resolveTree, visibleTrees } from "../src/config.mjs";
 import { runOp, treeNames } from "../src/runner.mjs";
+
+// loadConfig warns on stderr about a declared root that is gone; tests that
+// declare one on purpose capture the warning instead of polluting output.
+function quiet() {
+  const warnings = [];
+  return { warnings, warn: (message) => warnings.push(message) };
+}
 
 function writeConfig(t, value) {
   const root = mkdtempSync(join(tmpdir(), "work-coordination-mcp-"));
@@ -23,26 +30,97 @@ function makeTree(t) {
   return root;
 }
 
+// Declared roots must exist: a tree whose root is gone is reported, not
+// created, so every fixture makes its directories first.
+function makeDirs(t) {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-mcp-dirs-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+
 function configFor(t, trees) {
-  return loadConfig(writeConfig(t, { trees }));
+  return loadConfig(writeConfig(t, { trees }), quiet());
 }
 
 test("invisible trees resolve to nothing and never leak names", (t) => {
+  const dirs = makeDirs(t);
+  const open = join(dirs, "open");
+  const shut = join(dirs, "shut");
+  const unlisted = join(dirs, "unlisted");
+  for (const path of [open, shut, unlisted]) mkdirSync(path, { recursive: true });
   const config = configFor(t, [
-    { name: "open", root: "/tmp/open", visible: true },
-    { name: "shut", root: "/tmp/shut", visible: false },
-    { name: "unlisted", root: "/tmp/unlisted" },
+    { name: "open", root: open, visible: true },
+    { name: "shut", root: shut, visible: false },
+    { name: "unlisted", root: unlisted },
   ]);
 
   assert.deepEqual(visibleTrees(config), ["open", "unlisted"]);
   assert.deepEqual(treeNames(config), ["open", "unlisted"]);
   assert.equal(resolveTree(config, "shut"), null);
   assert.equal(resolveTree(config, "missing"), null);
-  assert.equal(resolveTree(config, "open").root, "/tmp/open");
+  assert.equal(resolveTree(config, "open").root, open);
+});
+
+test("relative roots resolve against the config file, not the process cwd", (t) => {
+  const dirs = makeDirs(t);
+  const first = join(dirs, "first");
+  mkdirSync(join(first, "tree"), { recursive: true });
+  const configPath = writeConfig(t, { trees: [{ name: "rel", root: "tree", visible: true }] });
+  // writeConfig owns the config's directory; "tree" lives beside it.
+  const configDir = dirname(configPath);
+  mkdirSync(join(configDir, "tree"), { recursive: true });
+
+  // Two configs with the same relative root, in different directories, must
+  // resolve to their own tree — never to the cwd.
+  const here = loadConfig(configPath, quiet());
+  assert.equal(resolveTree(here, "rel").root, join(configDir, "tree"));
+  const moved = mkdtempSync(join(tmpdir(), "work-coordination-mcp-cwd-"));
+  t.after(() => rmSync(moved, { recursive: true, force: true }));
+  const other = join(moved, "elsewhere");
+  mkdirSync(other, { recursive: true });
+  writeFileSync(join(moved, "config.json"), JSON.stringify({ trees: [{ name: "rel", root: "elsewhere", visible: true }] }));
+  const there = loadConfig(join(moved, "config.json"), quiet());
+  assert.equal(resolveTree(there, "rel").root, other);
+  assert.notEqual(resolveTree(here, "rel").root, resolveTree(there, "rel").root);
+});
+
+test("a ~ root expands to the home directory", () => {
+  const base = "/tmp/config-dir";
+  assert.equal(resolveConfigPath(base, "~/trees/x"), join(homedir(), "trees/x"));
+  assert.equal(resolveConfigPath(base, "~"), homedir());
+  assert.equal(resolveConfigPath(base, "relative/tree"), join(base, "relative/tree"));
+  assert.equal(resolveConfigPath(base, "/absolute/tree"), "/absolute/tree");
+});
+
+test("a declared root that is gone is reported, never created", (t) => {
+  const dirs = makeDirs(t);
+  const absent = join(dirs, "typoo");
+  const log = quiet();
+  const config = loadConfig(writeConfig(t, { trees: [{ name: "typo", root: absent }] }), log);
+
+  assert.deepEqual(visibleTrees(config), []);
+  assert.equal(missingTree(config, "typo").root, absent);
+  assert.deepEqual(treeNames(config), [`typo · unavailable · root missing · ${absent}`]);
+  assert.match(log.warnings.join("\n"), /root does not exist/);
+  assert.equal(existsSync(absent), false);
+});
+
+test("a hidden tree with a missing root stays hidden", (t) => {
+  const dirs = makeDirs(t);
+  const absent = join(dirs, "gone");
+  const log = quiet();
+  const config = loadConfig(writeConfig(t, { trees: [{ name: "shut", root: absent, visible: false }] }), log);
+
+  assert.deepEqual(treeNames(config), []);
+  assert.equal(missingTree(config, "shut"), null);
+  assert.deepEqual(log.warnings, []);
 });
 
 test("hidden and missing trees are rejected without running the operation", async (t) => {
-  const config = configFor(t, [{ name: "shut", root: "/tmp/shut", visible: false }]);
+  const dirs = makeDirs(t);
+  const shut = join(dirs, "shut");
+  mkdirSync(shut, { recursive: true });
+  const config = configFor(t, [{ name: "shut", root: shut, visible: false }]);
   const calls = [];
 
   for (const name of ["shut", "nope"]) {
@@ -51,6 +129,17 @@ test("hidden and missing trees are rejected without running the operation", asyn
       output: "tree unavailable",
     });
   }
+  assert.deepEqual(calls, []);
+});
+
+test("addressing a missing root says why instead of pretending it is unlisted", async (t) => {
+  const dirs = makeDirs(t);
+  const absent = join(dirs, "typoo");
+  const config = loadConfig(writeConfig(t, { trees: [{ name: "typo", root: absent }] }), quiet());
+  const calls = [];
+
+  const result = await runOp(config, "typo", (...args) => { calls.push(args); return "ran"; });
+  assert.deepEqual(result, { ok: false, output: `unavailable · root missing · ${absent}` });
   assert.deepEqual(calls, []);
 });
 

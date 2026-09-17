@@ -14,10 +14,12 @@ function setup(t) {
 
 function fakeChild() {
   const child = new EventEmitter();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  // Delivery finishes on `exit` and destroys the pipes it listened to.
+  child.stdout = Object.assign(new EventEmitter(), { destroy() {} });
+  child.stderr = Object.assign(new EventEmitter(), { destroy() {} });
+  child.unref = () => {};
   child.kill = () => {};
-  queueMicrotask(() => child.emit("close", 0));
+  queueMicrotask(() => child.emit("exit", 0));
   return child;
 }
 
