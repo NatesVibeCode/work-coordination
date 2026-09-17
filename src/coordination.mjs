@@ -75,12 +75,30 @@ export function renderMessage(message = {}) {
   const sessionRef = optionalText(message.sessionRef);
   const status = validStatus(message.status);
   const heading = `${workRef ? "Work" : "Session"} message${ref ? ` · #${ref}` : ""}`;
+  // `sender` is free text anyone can type; `sessionRef` is the identity that
+  // also appears in a work's participant list. Both are shown when they
+  // differ, because "from Codex / parser-repair" cannot be matched to
+  // "participants · codex:parser" otherwise.
+  const attribution = [sender, sessionRef && sessionRef !== sender ? sessionRef : null].filter(Boolean).join(" · ");
   const context = workRef
-    ? `${workRef}${sender ? ` · from ${sender}` : ""}`
-    : sender ? `from ${sender}` : "";
-  return [heading, context, sessionRef ? `session · ${sessionRef}` : "", status ? `status · ${status}` : "", "advisory — use if relevant; otherwise continue.", oneLine(message.body)]
+    ? `${workRef}${attribution ? ` · from ${attribution}` : ""}`
+    : attribution ? `from ${attribution}` : "";
+  // No work ref means the context line already names the session, so a
+  // separate identity line would just repeat it.
+  const identityLine = sessionRef && workRef && sessionRef !== sender ? `session · ${sessionRef}` : "";
+  return [heading, context, identityLine, status ? `status · ${status}` : "", "advisory — use if relevant; otherwise continue.", oneLine(message.body)]
     .filter((line) => line !== "")
     .join("\n");
+}
+
+// The advisory line belongs in a one-off send, where it tells the agent what to
+// do with the message. Repeating it under every message in a work view turns a
+// scroll of records into a scroll of boilerplate, so grouped views drop it.
+export function withoutBoilerplate(rendered) {
+  return String(rendered ?? "")
+    .split("\n\n")
+    .map((record) => record.split("\n").filter((line) => !line.startsWith("advisory — ")).join("\n"))
+    .join("\n\n");
 }
 
 export function addGroupMember(group = {}, groupRefOrMember, memberOrOptions, options = {}) {

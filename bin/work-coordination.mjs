@@ -33,7 +33,25 @@ import {
 const WRITE = "write";
 const READ = "read";
 
-const HELP = "try: message <text> [--work <ref>] [--from <session>] | work <ref> | roadmap <roadmap-key>";
+// The first thing someone sees when they run this with no arguments, so it
+// lists every command rather than the three the original hint happened to
+// mention. `--from` is display text and `--session` is identity — saying
+// "session" for the former taught the confusion.
+const HELP = [
+  "work-coordination <command> [flags]",
+  "  init [--expiry-ms <ms>]              create a private store here",
+  "  observe --work <ref> --session <id>   declare presence under a work",
+  "  message <text> [--work <ref>] [--session <id>] [--from <label>] [--status <s>] [--group <g>] [--to <h>:<id>] [--deliver]",
+  "  work <ref>                            participants and messages for one work",
+  "  sessions | groups | subscriptions      what is known here",
+  "  group create|join|messages <args>      ephemeral group lifecycle",
+  "  ungroup <group>                       remove a group",
+  "  subscribe --session <id> --to <h>:<id> [--work <ref>]   lane subscription",
+  "  unsubscribe <id>                      remove a subscription",
+  "  roadmap <key>                         read a roadmap item, read-only",
+  "statuses: started, milestone, blocked, done (only blocked and done notify)",
+  "--state <path> pins the store; there is no home-directory store",
+].join("\n");
 
 function valueFlag(name) {
   return { name, kind: "value" };

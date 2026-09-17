@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { destinationOf, oneLine, renderMessage } from "./coordination.mjs";
+import { destinationOf, oneLine, renderMessage, withoutBoilerplate } from "./coordination.mjs";
 import { deliverMessage } from "./delivery.mjs";
 import { deliverGroupMessage } from "./group-delivery.mjs";
 import { allObservations, observeParticipation, observedSessions, workView } from "./work-index.mjs";
@@ -103,7 +103,7 @@ export function showWork(store, workRef) {
   if (participants.length || messages.length) {
     const header = `Work · ${oneLine(workRef) || "unknown"}`;
     const people = participants.length ? participants.map((value) => oneLine(value.sessionRef)).join(", ") : "none observed";
-    const rendered = messages.length ? messages.map(renderMessage).join("\n\n") : "no messages observed";
+    const rendered = messages.length ? withoutBoilerplate(messages.map(renderMessage).join("\n\n")) : "no messages observed";
     return `${header}\nparticipants · ${people}\n\n${rendered}`;
   }
   // Records are stored normalized, so the expired-vs-missing lookup has to ask
@@ -135,7 +135,7 @@ export function joinGroupOp(store, groupId, sessionRef) {
 export function groupMessagesOp(store, groupRef) {
   if (groupState(store, groupRef) === "expired") return "group expired";
   const messages = messagesForGroup(store, groupRef);
-  return messages.length ? messages.map(renderMessage).join("\n\n") : "no messages observed";
+  return messages.length ? withoutBoilerplate(messages.map(renderMessage).join("\n\n")) : "no messages observed";
 }
 
 export function subscribeOp(store, { sessionRef, workRef, target } = {}) {

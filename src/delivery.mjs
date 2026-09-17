@@ -1,4 +1,5 @@
 import { spawn as systemSpawn } from "node:child_process";
+import { oneLine } from "./coordination.mjs";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -100,6 +101,14 @@ export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTi
     }
     let done = false;
     let timer = null;
+    // A harness says why it failed on stderr — "401 Unauthorized", "429 Too
+    // Many Requests", "connection reset". Reporting only the exit code makes
+    // every cause look identical, so the tail of that output is kept and
+    // reported. Bounded and folded to one line: this becomes user-facing text.
+    let complaint = "";
+    const remember = (chunk) => {
+      complaint = `${complaint}${String(chunk)}`.slice(-400);
+    };
     // The child is never allowed to hold the process open. A harness CLI can
     // leave a grandchild behind holding these pipes; if that outlived us, a
     // finished send would keep the whole command alive with nothing left to
@@ -127,7 +136,7 @@ export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTi
     const poke = () => { if (!done) arm(); };
     try {
       child.stdout?.on("data", poke);
-      child.stderr?.on("data", poke);
+      child.stderr?.on("data", (chunk) => { remember(chunk); poke(); });
     } catch {}
     child.on("error", (error) => {
       finish({ delivered: false, transport: null, warning: error?.message ?? String(error) });
@@ -136,9 +145,18 @@ export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTi
     // `exit`, not `close`: close waits for every inherited pipe to shut, and a
     // harness that left a grandchild holding one would stall the report.
     child.on("exit", (code) => {
-      finish(code === 0
-        ? { delivered: true, transport: route.transport, warning: null }
-        : { delivered: false, transport: null, warning: `transport exited with code ${code}` });
+      if (code === 0) {
+        finish({ delivered: true, transport: route.transport, warning: null });
+      } else {
+        // The harness's own words are the actionable part; the exit code alone
+        // cannot tell a dead key from a rate limit from a dropped connection.
+        const said = oneLine(complaint).slice(0, 300);
+        finish({
+          delivered: false,
+          transport: null,
+          warning: said ? `transport exited with code ${code} · ${said}` : `transport exited with code ${code}`,
+        });
+      }
       release();
     });
   });
