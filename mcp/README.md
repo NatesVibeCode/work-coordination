@@ -57,6 +57,7 @@ nothing to configure on the server side.
 - `message` — advisory message (`body`, `work`, `from`, `session`, `group`, `status`, `to`, `deliver`, `idle_timeout_ms`). `blocked` and `done` fan out to subscribers.
 - `sessions`, `work`, `groups`, `group_create`, `group_join`, `group_messages`, `ungroup`.
 - `subscribe`, `unsubscribe`, `subscriptions` — anyone may subscribe to any lane.
+- `pending`, `retry` — failed deliveries are queued, not lost; `retry` drains them.
 - `roadmap` — read one roadmap item and overlay observed local participation. Read-only and optional: it needs your own psql and table (`WORK_COORDINATION_ROADMAP_PSQL` selects the command) and reports `roadmap unavailable` when there is none.
 
 Internal failures report `unavailable · <reason>` instead of throwing. Sends

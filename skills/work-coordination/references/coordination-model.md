@@ -63,7 +63,8 @@ it is checked out beside this repo).
 
 A store is a `.work-coordination/` directory: `0700`, with `0600` files
 inside. It holds `participation.jsonl`, `messages/*.json`, `groups.json`,
-`members.jsonl`, `subscriptions.json`, and optionally `config.json`.
+`members.jsonl`, `subscriptions.json`, `outbox.json`, and optionally
+`config.json`.
 
 - Observations and memberships are **append-only logs**. Readers fold them, so
   concurrent observers and joins cannot lose each other.
@@ -74,6 +75,10 @@ inside. It holds `participation.jsonl`, `messages/*.json`, `groups.json`,
   file, no lease, no owner claim, and no writer ever waits on another.
 - A store contains state records and nothing else — no scratch files, no
   lock artifacts.
+- `outbox.json` is the queue of deliveries that did not land. It is state, not
+  a daemon: nothing drains it on a schedule, `retry` does, and an entry is
+  retired by a successful delivery to that destination or by the retention
+  window.
 
 ## Expiry
 

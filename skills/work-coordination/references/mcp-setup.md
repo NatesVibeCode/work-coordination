@@ -75,6 +75,7 @@ claude mcp add work-coordination -- node <repo>/mcp/src/index.mjs
 | `sessions`, `work` | Read participants and messages |
 | `groups`, `group_create`, `group_join`, `group_messages`, `ungroup` | Ephemeral group lifecycle |
 | `subscribe`, `unsubscribe`, `subscriptions` | Lane subscriptions |
+| `pending`, `retry` | Deliveries that did not land, and draining them |
 | `roadmap` | Read one roadmap item, overlay local participation (read-only, optional) |
 
 Every tool takes a tree **name**, never a path. Internal failures return

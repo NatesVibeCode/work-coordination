@@ -10,9 +10,11 @@ import {
   groupMessagesOp,
   joinGroupOp,
   listGroups,
+  listOutboxOp,
   listSessions,
   listSubscriptionsOp,
   observe as observeOp,
+  retryOutboxOp,
   sendAdvisory,
   showWork,
   subscribeOp,
@@ -151,6 +153,21 @@ server.registerTool("subscriptions", {
   description: "List lane subscriptions in one filetree.",
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listSubscriptionsOp(store))));
+
+// The queue a failed delivery goes into. Without these two, an MCP client
+// could cause a pending delivery and never see or drain it.
+server.registerTool("pending", {
+  description: "List deliveries that have not landed, oldest first, with the provider's last explanation.",
+  inputSchema: { tree: Tree },
+}, async ({ tree }) => text(await run(tree, (store) => listOutboxOp(store))));
+
+server.registerTool("retry", {
+  description: "Try every pending delivery again and report which landed. Nothing retries on its own.",
+  inputSchema: {
+    tree: Tree,
+    idle_timeout_ms: z.number().optional(),
+  },
+}, async ({ tree, idle_timeout_ms }) => text(await run(tree, (store) => retryOutboxOp(store, { idleTimeoutMs: idle_timeout_ms }))));
 
 // ungroup is the other half of group_create: an ephemeral group ends when
 // someone says so, not only when its TTL runs out.

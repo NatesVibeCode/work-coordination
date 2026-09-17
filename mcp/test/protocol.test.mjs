@@ -37,7 +37,7 @@ async function loadWiring() {
   return { loadConfig, buildServer };
 }
 
-const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "roadmap"];
+const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "roadmap", "pending", "retry"];
 
 async function linkedClient(t, trees, buildServer, loadConfig) {
   const root = mkdtempSync(join(tmpdir(), "work-coordination-protocol-"));
@@ -63,7 +63,7 @@ async function call(client, name, args) {
   return text(await client.callTool({ name, arguments: args }));
 }
 
-test("protocol exposes the fourteen tools with the documented names", async (t) => {
+test("protocol exposes the sixteen tools with the documented names", async (t) => {
   if (sdkMissing()) return t.skip(MISSING);
   const { loadConfig, buildServer } = await loadWiring();
   const tree = mkdtempSync(join(tmpdir(), "work-coordination-protocol-tree-"));
@@ -121,6 +121,11 @@ test("ungroup ends a group and roadmap degrades without a roadmap database", asy
   // Roadmap is optional infrastructure: absent, it says so instead of throwing.
   const view = await call(client, "roadmap", { tree: "open", ref: "roadmap.example.key" });
   assert.match(view, /roadmap item unavailable|roadmap unavailable/);
+
+  // The delivery queue is reachable over the protocol too: a client that
+  // causes a pending delivery must be able to see and drain it.
+  assert.equal(await call(client, "pending", { tree: "open" }), "no pending deliveries");
+  assert.equal(await call(client, "retry", { tree: "open" }), "no pending deliveries");
 });
 
 test("a declared root that does not exist is reported, never created", async (t) => {

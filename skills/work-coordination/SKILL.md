@@ -168,8 +168,8 @@ If the user's client already has the MCP server registered, prefer its tools
 over shelling out — same operations layer, same wording, one process, no PATH
 dependency. Tools: `trees_list`, `observe`, `message`, `sessions`, `work`,
 `groups`, `group_create`, `group_join`, `group_messages`, `ungroup`,
-`subscribe`, `unsubscribe`, `subscriptions`, `roadmap`. Every tool takes a
-tree *name* (never a path). See `references/mcp-setup.md`.
+`subscribe`, `unsubscribe`, `subscriptions`, `roadmap`, `pending`, `retry`.
+Every tool takes a tree *name* (never a path). See `references/mcp-setup.md`.
 
 ## Troubleshooting
 
