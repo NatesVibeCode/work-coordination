@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { activeGroup, createMessage, destinationOf, oneLine, renderMessage, textField } from "./coordination.mjs";
 import { NO_WRITE, replaceFile, replaceJsonFile, reviseJsonFile } from "./atomic-json.mjs";
 import { deliverMessage, mapBounded } from "./delivery.mjs";
+import { clearFailure, pruneOutbox, recordFailure } from "./outbox.mjs";
 
 function ensure(directory) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -413,9 +414,18 @@ export async function notifySubscribers(store, message = {}, { spawnFn, idleTime
     notified.add(target);
     pending.push({ subscriptionId: value.id, target, harness: value.targetHarness, sessionRef: value.targetSession });
   }
-  return mapBounded(pending, concurrency, async (entry) => ({
+  pruneOutbox(store);
+  const results = await mapBounded(pending, concurrency, async (entry) => ({
     subscriptionId: entry.subscriptionId,
     target: entry.target,
     ...(await deliverMessage({ harness: entry.harness, sessionRef: entry.sessionRef, message: rendered }, options)),
   }));
+  // A failure is remembered so `retry` can drain it later; a success clears
+  // whatever was pending for that destination. Nothing waits here.
+  for (const result of results) {
+    const address = { messageRef: message.ref, target: result.target };
+    if (result.delivered) clearFailure(store, address);
+    else recordFailure(store, { ...address, message: rendered, workRef, warning: result.warning });
+  }
+  return results;
 }

@@ -50,6 +50,8 @@ get wrong).
   - Pi through its opt-in session-control socket.
   - Hermes through `hermes peer dm`.
   - Claude returns unavailable until a verified local send seam exists.
+- Failed deliveries are queued, not lost: `pending` lists them with the
+  provider's own explanation, `retry` tries them again.
 - Compact message rendering:
 
   ```text
@@ -163,6 +165,14 @@ work-coordination \
 
 work-coordination \
   unsubscribe <subscription-id>
+
+# A delivery that did not land is queued, with what the provider said.
+# Nothing retries on its own — you drain it when the provider is back.
+work-coordination \
+  pending
+
+work-coordination \
+  retry
 ```
 
 New subscribers miss already-sent reports (fan-out is live, never replayed).
@@ -251,6 +261,11 @@ keeps everything for audit — that is the default. Two things to know:
 - Delivery is best-effort through local harness CLIs (`codex`, `pi`,
   `hermes`). A send that stalls past its idle timeout is reported, never
   fatal, and never blocks the other recipients.
+- A failed delivery is queued rather than lost: `pending` shows it (with the
+  provider's own explanation) and `retry` re-sends it. There is no daemon and
+  no timer, so it is drained when you ask, not on a schedule. The queue holds
+  at most 200 entries, oldest first, and drops entries whose record has aged
+  out of the store.
 - Concurrency is lock-free: a contended write retries and, if it still
   cannot land, reports a conflict. Nothing waits on a lock, because there
   are none to wait on.

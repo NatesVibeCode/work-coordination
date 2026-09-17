@@ -36,6 +36,8 @@ A destination (`--to`, or a group member) is compared case-insensitively:
 | `sessions` | reads | — | — |
 | `groups` | reads | — | — |
 | `subscriptions` | reads | — | — |
+| `pending` | reads | — | — |
+| `retry` | writes | `--idle-timeout-ms` | — |
 | `work` | reads | — | work ref |
 | `roadmap` | reads | — | roadmap key |
 
@@ -97,6 +99,26 @@ target and are never fatal. The advisory record is stored either way.
 Subscriber fan-out happens on a `blocked` or `done` message from a session
 that has a matching subscription; subscriptions scoped to a work only hear
 that work, and overlapping subscriptions to the same target notify once.
+
+## Deliveries that did not land
+
+A failed delivery is reported **and queued**, keyed by (message, destination):
+
+```sh
+work-coordination pending      # what is waiting: destination, age, attempts, the provider's words
+work-coordination retry        # try them all again now
+```
+
+`retry` drains the queue the same bounded way the live fan-out runs, reports
+each outcome, clears what landed, and bumps the attempt count on what did not.
+Nothing retries on its own: there is no daemon, no timer, and nothing waits.
+An entry whose record aged out of the retention window is dropped — there is
+nothing left to explain what it was for — and the queue is capped at 200,
+oldest first.
+
+This is why a provider being out of credit, rate limited, or disconnected does
+not lose the message: `work "<ref>"` still shows the record, and `pending`
+still holds the delivery.
 
 ## Roadmap (optional)
 

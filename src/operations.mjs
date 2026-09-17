@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { destinationOf, oneLine, renderMessage, withoutBoilerplate } from "./coordination.mjs";
-import { deliverMessage } from "./delivery.mjs";
+import { bumpAttempt, clearFailure, listOutbox, settle } from "./outbox.mjs";
+import { deliverMessage, mapBounded } from "./delivery.mjs";
 import { deliverGroupMessage } from "./group-delivery.mjs";
 import { allObservations, observeParticipation, observedSessions, workView } from "./work-index.mjs";
 import {
@@ -80,11 +81,26 @@ export async function sendAdvisory(store, { body, workRef, sender, sessionRef, g
   if (deliver) {
     const rendered = renderMessage(message);
     if (target) {
-      const result = await deliverMessage({ ...destinationOf(target), message: rendered }, deliveryOptions);
+      const destination = destinationOf(target);
+      const result = await deliverMessage({ ...destination, message: rendered }, deliveryOptions);
+      // An explicit send deserves the same durability as a fan-out: a message
+      // that did not land goes in the queue rather than vanishing into a
+      // warning line.
+      settle(store, {
+        messageRef: message.ref,
+        target: `${destination.harness}:${destination.sessionRef}`,
+        message: rendered,
+        workRef: message.workRef,
+        result,
+      });
       lines.push(result.delivered ? `delivery accepted · ${result.transport}` : `delivery unavailable · ${result.warning}`);
     } else {
       const group = activeGroups(store).find((value) => value.id === groupRef);
       const results = await deliverGroupMessage(group, rendered, deliveryOptions);
+      const members = Array.isArray(group?.members) ? group.members : [];
+      results.forEach((result, index) => {
+        settle(store, { messageRef: message.ref, target: oneLine(members[index]), message: rendered, workRef: message.workRef, result });
+      });
       lines.push(results.length ? results.map((result) => result.delivered ? `delivery accepted · ${result.transport}` : `delivery unavailable · ${result.warning}`).join("\n") : "delivery unavailable · no active group members");
     }
   }
@@ -151,4 +167,51 @@ export function unsubscribeOp(store, subscriptionId) {
 export function listSubscriptionsOp(store) {
   const subscriptions = listSubscriptions(store);
   return subscriptions.length ? subscriptions.map((value) => `${oneLine(value.id)} · ${oneLine(value.sessionRef)}${value.workRef ? ` · ${oneLine(value.workRef)}` : ""} → ${oneLine(value.targetHarness)}:${oneLine(value.targetSession)}`).join("\n") : "no subscriptions";
+}
+
+// Deliveries that did not land, oldest first, with what the provider said.
+export function listOutboxOp(store) {
+  const entries = listOutbox(store);
+  if (!entries.length) return "no pending deliveries";
+  return entries.map((entry) => {
+    const age = Math.max(0, Date.now() - Number(entry.createdAt ?? 0));
+    const attempts = Number(entry.attempts ?? 0);
+    return `${entry.messageRef} → ${entry.target}${entry.workRef ? ` · ${entry.workRef}` : ""} · ${attempts} ${attempts === 1 ? "attempt" : "attempts"} · ${Math.round(age / 1000)}s ago${entry.lastWarning ? ` · ${entry.lastWarning}` : ""}`;
+  }).join("\n");
+}
+
+// Drain the queue: try every pending delivery again, bound the same way the
+// live fan-out is, and report which ones landed. This is the whole reason the
+// queue exists — a provider that was down at send time does not mean the
+// message is gone.
+export async function retryOutboxOp(store, { spawnFn, idleTimeoutMs } = {}) {
+  const entries = listOutbox(store);
+  if (!entries.length) return "no pending deliveries";
+  const options = { concurrency: 4 };
+  if (spawnFn !== undefined) options.spawnFn = spawnFn;
+  if (idleTimeoutMs !== undefined && idleTimeoutMs !== null) options.idleTimeoutMs = idleTimeoutMs;
+
+  const attempts = await mapBounded(entries, options.concurrency, async (entry) => {
+    const { harness, sessionRef } = destinationOf(entry.target);
+    if (!harness || !sessionRef) return { entry, delivered: false, warning: `unusable destination · ${entry.target}` };
+    const result = await deliverMessage({ harness, sessionRef, message: entry.message }, options);
+    return { entry, ...result };
+  });
+
+  const delivered = [];
+  const failed = [];
+  for (const attempt of attempts) {
+    const address = { messageRef: attempt.entry.messageRef, target: attempt.entry.target };
+    if (attempt.delivered) {
+      clearFailure(store, address);
+      delivered.push(attempt);
+    } else {
+      bumpAttempt(store, { ...address, warning: attempt.warning });
+      failed.push(attempt);
+    }
+  }
+
+  const lines = [...delivered.map((attempt) => `delivered · ${attempt.entry.target} · ${attempt.transport ?? "transport"}`),
+    ...failed.map((attempt) => `still pending · ${attempt.entry.target} · ${attempt.warning ?? "unavailable"}`)];
+  return lines.length ? lines.join("\n") : "no pending deliveries";
 }

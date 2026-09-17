@@ -23,6 +23,8 @@ import {
   showWork,
   storeDirectoryForTree,
   storeForTree,
+  listOutboxOp,
+  retryOutboxOp,
   subscribeOp,
   unsubscribeOp,
 } from "../src/operations.mjs";
@@ -44,6 +46,8 @@ const HELP = [
   "  message <text> [--work <ref>] [--session <id>] [--from <label>] [--status <s>] [--group <g>] [--to <h>:<id>] [--deliver]",
   "  work <ref>                            participants and messages for one work",
   "  sessions | groups | subscriptions      what is known here",
+  "  pending                               deliveries that have not landed",
+  "  retry                                 try those deliveries again",
   "  group create|join|messages <args>      ephemeral group lifecycle",
   "  ungroup <group>                       remove a group",
   "  subscribe --session <id> --to <h>:<id> [--work <ref>]   lane subscription",
@@ -93,6 +97,8 @@ const COMMANDS = {
   subscribe: { mode: WRITE, flags: [valueFlag("--session"), valueFlag("--work"), valueFlag("--to")] },
   unsubscribe: { mode: WRITE, flags: [] },
   subscriptions: { mode: READ, flags: [] },
+  pending: { mode: READ, flags: [] },
+  retry: { mode: WRITE, flags: [valueFlag("--idle-timeout-ms")] },
   groups: { mode: READ, flags: [] },
   sessions: { mode: READ, flags: [] },
   roadmap: { mode: READ, flags: [] },
@@ -292,6 +298,13 @@ async function run(commandName, args, explicitState) {
 
   if (commandName === "unsubscribe") return unsubscribeOp(store, positional.join(" "));
   if (commandName === "subscriptions") return listSubscriptionsOp(store);
+  if (commandName === "pending") return listOutboxOp(store);
+  if (commandName === "retry") {
+    const idleTimeout = values.has("--idle-timeout-ms")
+      ? numericFlag(values, "--idle-timeout-ms", { minimum: 1, help })
+      : undefined;
+    return await retryOutboxOp(store, { idleTimeoutMs: idleTimeout });
+  }
   if (commandName === "groups") return listGroups(store);
   if (commandName === "sessions") return listSessions(store);
   if (commandName === "observe") {
