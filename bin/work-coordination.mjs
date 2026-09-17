@@ -225,6 +225,10 @@ async function run(commandName, args, explicitState) {
     const idleTimeout = values.has("--idle-timeout-ms")
       ? numericFlag(values, "--idle-timeout-ms", { minimum: 1, help })
       : undefined;
+    // A record with no body carries nothing, so it is a malformed call rather
+    // than an empty message: same exit code as a typo'd flag.
+    const body = positional.join(" ").trim();
+    if (!body) usage("message needs a body", help);
     // A typo'd status used to be dropped on the floor: the message stored
     // fine with status null and nothing said so, which reads exactly like
     // "no status given".
@@ -233,7 +237,7 @@ async function run(commandName, args, explicitState) {
       usage(`unknown status · ${values.get("--status")}`, `statuses: ${MESSAGE_STATUSES.join(", ")}`, help);
     }
     return await sendAdvisory(store, {
-      body: positional.join(" "),
+      body,
       workRef: value("--work"),
       sender: value("--from"),
       sessionRef: value("--session"),

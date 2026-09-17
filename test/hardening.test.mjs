@@ -338,6 +338,25 @@ test("a record inside the retention window still reports expired, not missing", 
   assert.equal(cli(["--state", dir, "group", "messages", "g_aged"]), "group expired\n");
 });
 
+test("a bodyless message is a malformed call, not an empty record", async (t) => {
+  const state = emptyStore(t, "empty-body");
+  for (const args of [["message", "", "--work", "T"], ["message", "   ", "--work", "T"], ["message", "--work", "T"]]) {
+    const result = run(repo, "--state", state, ...args);
+    assert.equal(result.status, 1, `expected refusal for ${JSON.stringify(args)}`);
+    assert.match(result.output, /message needs a body/);
+  }
+  assert.deepEqual(readdirSync(join(state, "messages")), [], "nothing may be stored");
+
+  // The shared layer refuses it too, so the MCP tool cannot store one either,
+  // and the address check still reports the address problem.
+  const { sendAdvisory } = await import("../src/operations.mjs");
+  assert.equal(await sendAdvisory(createState(state), { body: "  ", workRef: "T" }), "message body unavailable");
+  assert.equal(await sendAdvisory(createState(state), { body: "hi", groupRef: "g_missing" }), "group unavailable");
+
+  assert.equal(run(repo, "--state", state, "message", "real body", "--work", "T").status, 0);
+  assert.equal(readdirSync(join(state, "messages")).length, 1);
+});
+
 test("every write path uses a unique scratch name and cleans up", (t) => {
   const root = mkdtempSync(join(tmpdir(), "work-coordination-scratch-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

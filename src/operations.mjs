@@ -70,6 +70,7 @@ export function observe(store, { workRef, sessionRef, harness, directory, worktr
 
 export async function sendAdvisory(store, { body, workRef, sender, sessionRef, groupRef, status, deliver, target, idleTimeoutMs } = {}, { spawnFn } = {}) {
   const message = sendMessage(store, { workRef, sender, sessionRef, groupRef, status, body });
+  if (message === false) return "message body unavailable";
   if (!message) return groupState(store, groupRef) === "expired" ? "group expired" : "group unavailable";
   const lines = [renderMessage(message)];
   const deliveryOptions = { ...(idleTimeoutMs === undefined || idleTimeoutMs === null ? {} : { idleTimeoutMs }), ...(spawnFn ? { spawnFn } : {}) };

@@ -81,14 +81,18 @@ export function loadState(root) {
   return storeAt(String(root));
 }
 
+// Three outcomes, and callers must tell them apart: a stored record, a refused
+// address (null), and a refused body (false). A bodyless record carries
+// nothing, renders as a blank line, and is stored by nobody.
 export function sendMessage(store, input = {}, options = {}) {
+  const groupRef = textField(input.groupRef);
+  if (!oneLine(input.body)) return false;
   const persist = () => {
     const message = createMessage(input, options);
     writeJson(join(store.messages, `${message.ref}.json`), message);
     pruneExpiredMessages(store);
     return message;
   };
-  const groupRef = String(input.groupRef ?? "").trim();
   if (!groupRef) return persist();
   if (!activeGroups(store, options).some((group) => group.id === groupRef)) return null;
   return persist();

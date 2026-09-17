@@ -169,6 +169,8 @@ tree *name* (never a path). See `references/mcp-setup.md`.
 | Symptom | Meaning |
 | --- | --- |
 | `unknown flag · --x` / exit 1 | Malformed call. Fix the flag; the accepted set is printed. |
+| `unknown status · x` / exit 1 | Not one of `started`, `milestone`, `blocked`, `done`. |
+| `message needs a body` / exit 1 | A record with no text carries nothing. |
 | `nothing to do — try: ...` | No command given. |
 | `no sessions observed` | Store exists, nothing declared. |
 | `no work context observed` | Nothing for that ref. |
