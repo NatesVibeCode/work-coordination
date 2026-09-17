@@ -63,7 +63,7 @@ embedded newlines cannot forge a record. A body prints after the
 `advisory — use if relevant; otherwise continue.` marker.
 
 ```text
-Work message · #m_7k3p
+Work message · #m_4f2a91c7b3
 Ticket T-123 · from Codex / parser-repair
 status · milestone
 advisory — use if relevant; otherwise continue.

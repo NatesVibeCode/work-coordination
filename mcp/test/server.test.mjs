@@ -105,6 +105,43 @@ test("a declared root that is gone is reported, never created", (t) => {
   assert.equal(existsSync(absent), false);
 });
 
+test("a config that declares no trees is refused instead of loading empty", (t) => {
+  const dirs = makeDirs(t);
+  const write = (name, body) => {
+    const path = join(dirs, name);
+    writeFileSync(path, JSON.stringify(body));
+    return path;
+  };
+
+  // A typo'd key ("tree" for "trees") used to load zero trees silently, so
+  // every tool answered "tree unavailable" with no hint why.
+  for (const [label, body, expected] of [
+    ["misspelled key", { tree: [] }, /found key "tree" instead/],
+    ["one letter off", { treez: [] }, /found key "treez" instead/],
+    ["wrong value type", { trees: "nope" }, /found a string/],
+    ["no trees key", {}, /missing/],
+    ["no near-miss key", { servers: {} }, /missing/],
+    ["not an object", [], /must be a JSON object/],
+  ]) {
+    assert.throws(() => loadConfig(write(`bad-${label.replace(/\W/g, "")}.json`, body), quiet()), expected, label);
+  }
+
+  // A well-formed config still loads, an empty tree list included.
+  const empty = loadConfig(write("empty.json", { trees: [] }), quiet());
+  assert.deepEqual(empty.trees, []);
+});
+
+test("a root that exists but is not a directory is reported as missing", (t) => {
+  const dirs = makeDirs(t);
+  const file = join(dirs, "a-file");
+  writeFileSync(file, "not a tree");
+  const log = quiet();
+  const config = loadConfig(writeConfig(t, { trees: [{ name: "file", root: file }] }), log);
+
+  assert.deepEqual(visibleTrees(config), []);
+  assert.match(log.warnings.join("\n"), /root does not exist/);
+});
+
 test("a hidden tree with a missing root stays hidden", (t) => {
   const dirs = makeDirs(t);
   const absent = join(dirs, "gone");

@@ -53,7 +53,7 @@ get wrong).
 - Compact message rendering:
 
   ```text
-  Work message · #m_7k3p
+  Work message · #m_4f2a91c7b3
   Ticket T-123 · from Codex / parser-repair
   advisory — use if relevant; otherwise continue.
   Tokenizer now returns spans. I’m updating callers; keep validation and flag breaks.

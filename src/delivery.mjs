@@ -59,12 +59,32 @@ function transportFor(harness) {
   return null;
 }
 
+// The idle timeout is the one number a caller can get catastrophically wrong:
+// `Infinity` reads as "wait forever" but reaches setTimeout as 1ms (Node clamps
+// it), so an unbounded wait becomes an instant failure with a nonsense
+// message. Validate once here so the CLI, the MCP tool, and the library all
+// behave the same; `undefined` means "not supplied" and takes the default.
+function usableTimeout(value, fallback) {
+  if (value === undefined || value === null) return { ok: true, ms: fallback };
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 1) return { ok: false, ms: fallback };
+  return { ok: true, ms };
+}
+
 export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTimeoutMs = 60_000 } = {}) {
   const harness = text(input.harness).toLowerCase();
   const sessionRef = text(input.sessionRef);
   const message = String(input.message ?? "");
   if (!harness || !sessionRef || !message) {
     return { delivered: false, transport: null, warning: "message destination unavailable" };
+  }
+  const timeout = usableTimeout(idleTimeoutMs, 60_000);
+  if (!timeout.ok) {
+    return {
+      delivered: false,
+      transport: null,
+      warning: `message not sent · idleTimeoutMs must be a finite number >= 1 (got ${String(idleTimeoutMs)})`,
+    };
   }
   const route = transportFor(harness);
   if (!route) {
@@ -98,10 +118,10 @@ export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTi
     const arm = () => {
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
-        finish({ delivered: false, transport: null, warning: `transport idle timeout after ${idleTimeoutMs}ms without activity` });
+        finish({ delivered: false, transport: null, warning: `transport idle timeout after ${timeout.ms}ms without activity` });
         try { child.kill("SIGKILL"); } catch {}
         release();
-      }, Math.max(0, Number(idleTimeoutMs) || 0));
+      }, timeout.ms);
     };
     arm();
     const poke = () => { if (!done) arm(); };

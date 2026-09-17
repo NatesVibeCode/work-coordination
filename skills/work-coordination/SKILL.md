@@ -131,13 +131,20 @@ group.
 ## Syntax rules worth knowing
 
 - `--flag value` and `--flag=value` both work.
-- A bare `--` ends flags, so a body may begin with a dash.
+- A bare `--` ends flags, so a body may begin with a dash:
+  `message --work "T-1" -- "-dash body"`. Without it, a body token starting
+  with `-` is read as a flag and the call fails with `unknown flag`.
+- A flag value may not start with a dash: `--work -x` is refused instead of
+  quietly storing a work ref named `-x`.
 - A repeated flag is an error, not last-wins.
 - `--state <path>` works before or after the subcommand and pins the store
   explicitly; without it, the nearest `.work-coordination` walking up from the
   current directory is used.
 - Output is one record per line. Fields are folded to a single line, so a
   newline in your text cannot forge a record.
+- Re-observing the same work as the same session inside a short window says
+  nothing new and is not appended again; outside it, the observation is
+  re-declared so the session still reads as recently active.
 
 ## Expiry
 

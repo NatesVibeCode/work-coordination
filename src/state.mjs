@@ -1,7 +1,7 @@
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { activeGroup, createMessage, oneLine, renderMessage } from "./coordination.mjs";
-import { NO_WRITE, reviseJsonFile } from "./atomic-json.mjs";
+import { NO_WRITE, replaceFile, replaceJsonFile, reviseJsonFile } from "./atomic-json.mjs";
 import { deliverMessage, mapBounded } from "./delivery.mjs";
 
 function ensure(directory) {
@@ -13,10 +13,10 @@ function readJson(path, fallback) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
 }
 
+// Every replacement goes through the shared scratch helper: a temp file named
+// only by process id is one two writers can share.
 function writeJson(path, value) {
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
+  replaceJsonFile(path, value);
 }
 
 let idCounter = 0;
@@ -215,14 +215,17 @@ export function createGroup(store, input = {}, { now = Date.now(), random = Math
 // A join is refused for a group that is no longer addressable: missing, past
 // its TTL, or past the retention window. Membership is append-only and the
 // append is one atomic write, never a read-modify-write, so concurrent joins
-// cannot lose each other and nothing ever waits.
+// cannot lose each other and nothing ever waits. Re-joining as a session that
+// is already a member appends nothing — the folded member set is unchanged,
+// so repeating a join must not grow the log.
 export function joinGroup(store, groupId, sessionRef, options = {}) {
   const current = groupState(store, groupId, options);
   if (current !== "active") return null;
   const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
   if (!record) return null;
   const member = oneLine(sessionRef);
-  if (member) {
+  const members = foldMembers(store, record);
+  if (member && !members.includes(member)) {
     appendFileSync(memberLogPath(store), `${JSON.stringify({ group: record.id, member, at: Number(options?.now ?? Date.now()) })}\n`, { mode: 0o600 });
   }
   return { ...record, members: foldMembers(store, record) };
@@ -246,10 +249,7 @@ export function removeGroup(store, groupId) {
   for (const entry of readMemberLog(store)) {
     if (entry.group !== id) kept.push(JSON.stringify(entry));
   }
-  const path = memberLogPath(store);
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, kept.length ? `${kept.join("\n")}\n` : "", { mode: 0o600 });
-  renameSync(temporary, path);
+  replaceFile(memberLogPath(store), kept.length ? `${kept.join("\n")}\n` : "");
   return removed;
 }
 

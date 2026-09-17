@@ -80,6 +80,12 @@ const COMMANDS = {
   work: { mode: READ, flags: [] },
 };
 
+// "-5" is a value someone meant to supply, and the numeric validator gives a
+// far better message for it than "needs a value" does. "-x" is not.
+function looksNumeric(token) {
+  return /^-\d/.test(token) || /^-\.\d/.test(token);
+}
+
 class UsageError extends Error {}
 
 function usage(...lines) {
@@ -119,7 +125,10 @@ function parseArgs(args, command) {
       continue;
     }
     const value = inline !== undefined ? inline : args[index + 1];
-    if (value === undefined || (inline === undefined && value.startsWith("--"))) {
+    // A missing value must not swallow the next flag, and a dash-led token is
+    // far more likely a typo'd flag than a work ref named "-x". A body that
+    // genuinely starts with a dash belongs after `--`.
+    if (value === undefined || (inline === undefined && value.startsWith("-") && !looksNumeric(value))) {
       usage(`${name} needs a value`, `${command.help}`);
     }
     if (inline === undefined) index++;

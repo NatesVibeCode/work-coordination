@@ -56,8 +56,27 @@ function load(store) {
   return allObservations(store).filter((record) => Number(record.observedAt ?? 0) >= cutoff);
 }
 
+const PAYLOAD_FIELDS = ["workRef", "sessionRef", "harness", "directory", "worktree", "title"];
+
+function samePayload(left, right) {
+  return PAYLOAD_FIELDS.every((field) => (left?.[field] ?? null) === (right?.[field] ?? null));
+}
+
+// How long a repeat observation of the same thing is considered already said.
+// `observedAt` is a recency signal — `sessions` sorts by it and expiry filters
+// on it — so aging it out would freeze a busy session as "last seen" at its
+// first call. Within the window a duplicate says nothing new and is not
+// appended; past it, the observation is re-declared and does append.
+const OBSERVATION_REFRESH_MS = 15 * 60 * 1000;
+
+// Observations are append-only: one atomic append per observe, never a
+// read-modify-write, so concurrent observers cannot lose each other and
+// nothing ever waits. (Nothing prunes this log: an aged-out record is the
+// evidence that tells "expired" apart from "never observed", so compaction
+// would destroy a distinction the CLI promises.)
 export function observeParticipation(store, input = {}, { now = Date.now(), random = Math.random } = {}) {
   const sessionRef = textField(input.sessionRef) ?? `session_${String(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local"}`;
+  const at = Number(now);
   const record = {
     workRef: textField(input.workRef),
     sessionRef,
@@ -65,9 +84,11 @@ export function observeParticipation(store, input = {}, { now = Date.now(), rand
     directory: textField(input.directory),
     worktree: textField(input.worktree),
     title: textField(input.title),
-    observedAt: Number(now),
+    observedAt: at,
   };
-  appendFileSync(logPath(store), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  const alreadySaid = allObservations(store).some((existing) => samePayload(existing, record)
+    && at - Number(existing.observedAt ?? 0) < OBSERVATION_REFRESH_MS);
+  if (!alreadySaid) appendFileSync(logPath(store), `${JSON.stringify(record)}\n`, { mode: 0o600 });
   return record;
 }
 

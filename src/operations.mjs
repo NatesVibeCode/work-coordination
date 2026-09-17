@@ -106,7 +106,10 @@ export function showWork(store, workRef) {
     const rendered = messages.length ? messages.map(renderMessage).join("\n\n") : "no messages observed";
     return `${header}\nparticipants · ${people}\n\n${rendered}`;
   }
-  const ref = String(workRef ?? "");
+  // Records are stored normalized, so the expired-vs-missing lookup has to ask
+  // with the same normalized ref — otherwise a padded ref reports "no context"
+  // for a work whose records merely aged out.
+  const ref = oneLine(workRef);
   const expired = rawMessagesForWork(store, ref).length > 0 || allObservations(store).some((record) => record.workRef === ref);
   return expired ? "work expired" : "no work context observed";
 }

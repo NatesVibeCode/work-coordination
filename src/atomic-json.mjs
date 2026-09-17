@@ -37,6 +37,26 @@ function scratchPath(path) {
   return `${path}.${process.pid}-${threadId}-${scratchCounter}-${Math.random().toString(36).slice(2, 8)}.tmp`;
 }
 
+// Replace a file with `content` in one step: write a scratch file nobody else
+// can be using, then rename it into place. The scratch file is removed if the
+// rename fails, so a store holds state records and nothing else.
+export function replaceFile(path, content) {
+  const temporary = scratchPath(path);
+  writeFileSync(temporary, content, { mode: 0o600 });
+  try {
+    renameSync(temporary, path);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {}
+    throw error;
+  }
+}
+
+export function replaceJsonFile(path, value) {
+  replaceFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 export function reviseJsonFile(path, fallback, revise, { maxAttempts = 50 } = {}) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const raw = readRaw(path);
@@ -48,8 +68,7 @@ export function reviseJsonFile(path, fallback, revise, { maxAttempts = 50 } = {}
       try {
         renameSync(temporary, path);
       } catch (error) {
-        // A failed install must not leave its scratch file behind: the store
-        // holds state records and nothing else.
+        // A failed install must not leave its scratch file behind either.
         try {
           unlinkSync(temporary);
         } catch {}

@@ -22,6 +22,24 @@ function isDirectory(path) {
 
 export function loadConfig(path, { warn = (message) => process.stderr.write(`${message}\n`) } = {}) {
   const raw = JSON.parse(readFileSync(path, "utf8"));
+  // A config that declares nothing is indistinguishable from a typo'd key
+  // ("tree" for "trees") once it loads: every tool would just answer "tree
+  // unavailable". Refuse it instead, so the mistake is named at startup.
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new TypeError("config must be a JSON object with a \"trees\" array");
+  }
+  if (!Array.isArray(raw.trees)) {
+    // The key present with the wrong value is a different mistake from the key
+    // misspelled, and they need different messages.
+    if (raw.trees !== undefined) throw new TypeError(`"trees" must be an array (found a ${typeof raw.trees})`);
+    const nearMiss = Object.keys(raw).find((key) => {
+      const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
+      return normalized.length > 2 && Math.abs(normalized.length - "trees".length) <= 1
+        && (normalized.startsWith("tree") || "trees".startsWith(normalized));
+    });
+    if (nearMiss) throw new TypeError(`"trees" must be an array (found key "${nearMiss}" instead)`);
+    throw new TypeError(`"trees" must be an array (missing)`);
+  }
   const baseDir = dirname(resolve(String(path)));
   const entries = Array.isArray(raw.trees) ? raw.trees : [];
   const trees = [];
