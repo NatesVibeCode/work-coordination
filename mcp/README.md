@@ -99,3 +99,26 @@ or in config JSON:
 Relative tree roots inside that config resolve against the config file, so a
 config written with `"root": "."` or `"root": "../other-repo"` keeps working
 wherever the client starts the server.
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.work-coordination]
+command = "node"
+args = ["<repo>/mcp/src/index.mjs"]
+[mcp_servers.work-coordination.env]
+WORK_COORDINATION_MCP_CONFIG = "<repo>/mcp/config.json"
+```
+
+Muse (`~/.config/muse/settings.json`, under `mcpServers`):
+
+```json
+{ "mcpServers": { "work-coordination": {
+  "command": "node",
+  "args": ["<repo>/mcp/src/index.mjs"],
+  "env": { "WORK_COORDINATION_MCP_CONFIG": "<repo>/mcp/config.json" }
+} } }
+```
+
+Muse documents streamable-HTTP entries; the stdio entry above is confirmed
+live before relying on it.
