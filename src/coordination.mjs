@@ -61,6 +61,7 @@ export function createMessage(input = {}, { now = Date.now(), random = Math.rand
     workRef: optionalText(input.workRef),
     sender: optionalText(input.sender),
     sessionRef: optionalText(input.sessionRef),
+    to: optionalText(input.to),
     groupRef: optionalText(input.groupRef),
     status: validStatus(input.status),
     body: oneLine(input.body),

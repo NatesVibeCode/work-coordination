@@ -109,7 +109,7 @@ function messageFiles(store) {
   }
 }
 
-function messagesMatching(store, field, value, cutoff = expiryCutoff(store)) {
+export function messagesMatching(store, field, value, cutoff = expiryCutoff(store)) {
   const needle = String(value ?? "");
   const kept = [];
   for (const entry of messageFiles(store)) {

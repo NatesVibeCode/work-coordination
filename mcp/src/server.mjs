@@ -22,6 +22,7 @@ import {
 } from "../../src/operations.mjs";
 import { roadmapViewFor } from "../../src/roadmap.mjs";
 import { removeGroup } from "../../src/state.mjs";
+import { renderUnread } from "../../src/mailbox.mjs";
 import { runOp, treeNames } from "./runner.mjs";
 
 export function buildServer(config) {
@@ -33,6 +34,15 @@ const Tree = z.string().describe("Visible filetree to operate in (see trees_list
 
 function text(result) {
   return { content: [{ type: "text", text: result.output }] };
+}
+// mboxOutput appends the caller's unread mail to an operation's
+// output, inside the run callback where the store lives. The
+// recipient self-identifies with the optional `session` argument —
+// the same declared-presence identity used everywhere else.
+// Rendering is delivery: attached mail does not attach twice.
+function mboxOutput(output, store, sessionRef) {
+  const attached = renderUnread(store, sessionRef);
+  return attached ? output + attached : output;
 }
 
 function run(tree, operation) {
@@ -50,14 +60,16 @@ server.registerTool("observe", {
     harness: z.string().optional(),
     directory: z.string().optional(),
   },
-}, async ({ tree, work, session, harness, directory }) => text(await run(tree, (store, resolved) => observeOp(store, {
-  workRef: work,
-  sessionRef: session,
-  harness,
-  directory: directory ?? resolved.root,
-  worktree: gitToplevel(resolved.root),
-}))));
-
+}, async ({ tree, work, session, harness, directory }) => text(await run(tree, async (store, resolved) => {
+  const output = await observeOp(store, {
+    workRef: work,
+    sessionRef: session,
+    harness,
+    directory: directory ?? resolved.root,
+    worktree: gitToplevel(resolved.root),
+  });
+  return mboxOutput(output, store, session);
+})));
 server.registerTool("message", {
   description: "Send an advisory message scoped to work. Optional progress status; blocked and done fan out to subscribers.",
   inputSchema: {
@@ -72,22 +84,29 @@ server.registerTool("message", {
     deliver: z.boolean().optional(),
     idle_timeout_ms: z.number().optional(),
   },
-}, async ({ tree, body, work, from, session, group, status, to, deliver, idle_timeout_ms }) => text(await run(tree, (store) => sendAdvisory(store, {
-  body,
-  workRef: work,
-  sender: from,
-  sessionRef: session,
-  groupRef: group,
-  status,
-  deliver,
-  target: to,
-  idleTimeoutMs: idle_timeout_ms,
-}))));
+}, async ({ tree, body, work, from, session, group, status, to, deliver, idle_timeout_ms }) => text(await run(tree, async (store) => {
+  const output = await sendAdvisory(store, {
+    body,
+    workRef: work,
+    sender: from,
+    sessionRef: session,
+    to,
+    groupRef: group,
+    status,
+    deliver,
+    target: to,
+    idleTimeoutMs: idle_timeout_ms,
+  });
+  return mboxOutput(output, store, session);
+})));
 
 server.registerTool("sessions", {
-  description: "List observed sessions in one filetree.",
-  inputSchema: { tree: Tree },
-}, async ({ tree }) => text(await run(tree, (store) => listSessions(store))));
+  description: "List observed sessions in one filetree. Pass your session ref to receive your unread mailbox with the response.",
+  inputSchema: { tree: Tree, session: z.string().optional() },
+}, async ({ tree, session }) => text(await run(tree, async (store) => {
+  const output = await listSessions(store);
+  return mboxOutput(output, store, session);
+})));
 
 server.registerTool("work", {
   description: "Show one typed work with its participants and messages.",
