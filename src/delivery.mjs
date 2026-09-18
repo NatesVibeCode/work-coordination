@@ -1,5 +1,5 @@
 import { spawn as systemSpawn } from "node:child_process";
-import { oneLine } from "./coordination.mjs";
+import { transportForSessionRef } from "./transports.mjs";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -30,134 +30,23 @@ export async function mapBounded(items, limit, operation) {
   return results;
 }
 
-function transportFor(harness) {
-  if (harness === "codex") {
-    return {
-      cmd: "codex",
-      argv: (sessionRef, message) => ["queue", "--thread", sessionRef, "--message", message],
-      transport: "codex-queue",
-    };
-  }
-  if (harness === "pi") {
-    return {
-      cmd: "pi",
-      argv: (sessionRef, message) => [
-        "--control-session", sessionRef,
-        "--send-session-message", message,
-        "--send-session-mode", "steer",
-        "--send-session-wait", "turn_end",
-      ],
-      transport: "pi-session-control",
-    };
-  }
-  if (harness === "hermes") {
-    return {
-      cmd: "hermes",
-      argv: (sessionRef, message) => ["peer", "dm", sessionRef, message],
-      transport: "hermes-peer-dm",
-    };
-  }
-  return null;
-}
-
-// The idle timeout is the one number a caller can get catastrophically wrong:
-// `Infinity` reads as "wait forever" but reaches setTimeout as 1ms (Node clamps
-// it), so an unbounded wait becomes an instant failure with a nonsense
-// message. Validate once here so the CLI, the MCP tool, and the library all
-// behave the same; `undefined` means "not supplied" and takes the default.
-function usableTimeout(value, fallback) {
-  if (value === undefined || value === null) return { ok: true, ms: fallback };
-  const ms = Number(value);
-  if (!Number.isFinite(ms) || ms < 1) return { ok: false, ms: fallback };
-  return { ok: true, ms };
-}
-
-export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTimeoutMs = 60_000 } = {}) {
+// Delivery dispatch is harness-agnostic: the transports themselves live in
+// src/transports.mjs and register into the registry there; this module keeps
+// the entry shape the frontends call — `{ harness, sessionRef, message }`,
+// with the harness half already split off by `destinationOf()` — and hands
+// the delivery to whatever transport answers for that harness. A harness
+// nobody registered a transport for is the mailbox-only case: the message is
+// still stored, so the report says no push transport exists.
+export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTimeoutMs = 60_000, ...transportOptions } = {}) {
   const harness = text(input.harness).toLowerCase();
   const sessionRef = text(input.sessionRef);
   const message = String(input.message ?? "");
   if (!harness || !sessionRef || !message) {
     return { delivered: false, transport: null, warning: "message destination unavailable" };
   }
-  const timeout = usableTimeout(idleTimeoutMs, 60_000);
-  if (!timeout.ok) {
-    return {
-      delivered: false,
-      transport: null,
-      warning: `message not sent · idleTimeoutMs must be a finite number >= 1 (got ${String(idleTimeoutMs)})`,
-    };
-  }
-  const route = transportFor(harness);
+  const route = transportForSessionRef(`${harness}:${sessionRef}`);
   if (!route) {
     return { delivered: false, transport: null, warning: `no verified local message transport for ${harness}` };
   }
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawnFn(route.cmd, route.argv(sessionRef, message), { stdio: ["ignore", "pipe", "pipe"] });
-    } catch (error) {
-      resolve({ delivered: false, transport: null, warning: error?.message ?? String(error) });
-      return;
-    }
-    let done = false;
-    let timer = null;
-    // A harness says why it failed on stderr — "401 Unauthorized", "429 Too
-    // Many Requests", "connection reset". Reporting only the exit code makes
-    // every cause look identical, so the tail of that output is kept and
-    // reported. Bounded and folded to one line: this becomes user-facing text.
-    let complaint = "";
-    const remember = (chunk) => {
-      complaint = `${complaint}${String(chunk)}`.slice(-400);
-    };
-    // The child is never allowed to hold the process open. A harness CLI can
-    // leave a grandchild behind holding these pipes; if that outlived us, a
-    // finished send would keep the whole command alive with nothing left to
-    // report. Reporting ends, then the process ends.
-    const release = () => {
-      try { child.stdout?.destroy(); } catch {}
-      try { child.stderr?.destroy(); } catch {}
-      try { child.unref?.(); } catch {}
-    };
-    const finish = (result) => {
-      if (done) return;
-      done = true;
-      if (timer !== null) clearTimeout(timer);
-      resolve(result);
-    };
-    const arm = () => {
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => {
-        finish({ delivered: false, transport: null, warning: `transport idle timeout after ${timeout.ms}ms without activity` });
-        try { child.kill("SIGKILL"); } catch {}
-        release();
-      }, timeout.ms);
-    };
-    arm();
-    const poke = () => { if (!done) arm(); };
-    try {
-      child.stdout?.on("data", poke);
-      child.stderr?.on("data", (chunk) => { remember(chunk); poke(); });
-    } catch {}
-    child.on("error", (error) => {
-      finish({ delivered: false, transport: null, warning: error?.message ?? String(error) });
-      release();
-    });
-    // `exit`, not `close`: close waits for every inherited pipe to shut, and a
-    // harness that left a grandchild holding one would stall the report.
-    child.on("exit", (code) => {
-      if (code === 0) {
-        finish({ delivered: true, transport: route.transport, warning: null });
-      } else {
-        // The harness's own words are the actionable part; the exit code alone
-        // cannot tell a dead key from a rate limit from a dropped connection.
-        const said = oneLine(complaint).slice(0, 300);
-        finish({
-          delivered: false,
-          transport: null,
-          warning: said ? `transport exited with code ${code} · ${said}` : `transport exited with code ${code}`,
-        });
-      }
-      release();
-    });
-  });
+  return route.deliver(sessionRef, message, { spawnFn, idleTimeoutMs, ...transportOptions });
 }
