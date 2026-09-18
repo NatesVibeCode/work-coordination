@@ -2,7 +2,12 @@
 // knows how to push a message into one harness's live session; the registry
 // knows which transport answers for which session ref. A ref is
 // "<harness>:<session>", so lookup is by prefix — "codex:one" answers to the
-// codex transport, "muse:..." to muse, "opencode:..." to opencode. A prefix
+// codex transport. Muse and opencode have no push transport: their
+// sessions receive mail through the mailbox floor (an MCP connection
+// is the only requirement), because muse session-message is
+// unavailable on this install and a live opencode TUI has no server
+// port unless the operator starts one — a headless run must never be
+// spawned to drop off a message. A prefix
 // nobody registered is not an error: the mailbox is the universal pull floor,
 // so an unknown ref simply means "no push transport; mailbox only".
 import { spawn as systemSpawn } from "node:child_process";
@@ -207,39 +212,7 @@ registerTransport(spawnTransport({
   argv: (sessionRef, message) => ["peer", "dm", sessionRef, message],
 }));
 
-// Muse reads the message body on stdin (`muse session-message send --target
-// <session-uuid-or-name> [--json] < body`, per `muse session-message send
-// --help`).
-registerTransport(spawnTransport({
-  name: "muse",
-  prefixes: ["muse"],
-  cmd: "muse",
-  transport: "muse-session-message",
-  argv: (sessionRef) => ["session-message", "send", "--target", sessionRef, "--json"],
-  input: (message) => message,
-}));
 
-// OpenCode is only ever pushed into when a server for the session already
-// exists: a configured port (OC_WORKCOORDINATE_PORT, or a per-session port
-// handed in by the caller through `portFor`). With no port there is nothing
-// to deliver into — and a headless `opencode run` must never be spawned just
-// to drop off a message — so the mailbox remains the way mail arrives.
-registerTransport({
-  name: "opencode",
-  prefixes: ["opencode"],
-  deliver(sessionRef, message, options = {}) {
-    const ref = sessionPart("opencode", sessionRef);
-    const port = options.portFor?.(ref) ?? text(process.env.OC_WORKCOORDINATE_PORT);
-    if (!port) {
-      return Promise.resolve({ delivered: false, transport: null, warning: "no port; mailbox only" });
-    }
-    const dir = text(options.dir ?? process.env.OC_WORKCOORDINATE_TREE) || process.cwd();
-    return spawnDelivery(
-      { cmd: "opencode", transport: "opencode-run", argv: ["run", "--session", ref, "--dir", dir, "--port", port] },
-      options,
-    );
-  },
-});
 
 // Registry-level delivery by full session ref. An unknown prefix is not an
 // error: the mailbox is the universal pull floor, so the report says the

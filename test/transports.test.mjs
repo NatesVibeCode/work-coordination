@@ -38,10 +38,13 @@ function stubSpawn(calls) {
 
 test("the registry answers by session-ref prefix", () => {
   const names = new Set(registeredTransports().map((t) => t.name));
-  for (const prefix of ["codex", "pi", "hermes", "muse", "opencode"]) {
+  for (const prefix of ["codex", "pi", "hermes"]) {
     assert.equal(transportForSessionRef(`${prefix}:whatever`)?.name, prefix, `${prefix} must answer for its own refs`);
     assert.equal(names.has(prefix), true);
   }
+  // Muse and opencode have no push transport: the mailbox floor covers them.
+  assert.equal(transportForSessionRef("muse:whatever"), null);
+  assert.equal(transportForSessionRef("opencode:whatever"), null);
   assert.equal(transportForSessionRef("smoke:whatever"), null);
   assert.equal(transportForSessionRef(""), null);
   assert.equal(transportForSessionRef("codex-but-not-a-prefix:one")?.name ?? null, null);
@@ -79,54 +82,6 @@ test("the pi transport keeps its native control path and strips its ref prefix",
     { stdio: ["ignore", "pipe", "pipe"] },
   ]]);
   assert.deepEqual(result, { delivered: true, transport: "pi-session-control", warning: null });
-});
-
-test("the muse transport sends the body on stdin through session-message send", async () => {
-  const calls = [];
-  const written = [];
-  const spawnFn = (cmd, argv, options) => {
-    calls.push([cmd, argv, options]);
-    const child = fakeChild();
-    child.stdin.write = (chunk) => written.push(String(chunk));
-    return child;
-  };
-  const result = await deliverBySessionRef("muse:muse-abc", message, { spawnFn });
-  assert.deepEqual(calls, [[
-    "muse",
-    ["session-message", "send", "--target", "muse-abc", "--json"],
-    { stdio: ["pipe", "pipe", "pipe"] },
-  ]]);
-  assert.deepEqual(written, [message]);
-  assert.deepEqual(result, { delivered: true, transport: "muse-session-message", warning: null });
-});
-
-test("the opencode transport declines without a configured port and never spawns", async () => {
-  const calls = [];
-  const previous = process.env.OC_WORKCOORDINATE_PORT;
-  delete process.env.OC_WORKCOORDINATE_PORT;
-  try {
-    const result = await deliverBySessionRef("opencode:s1", message, { spawnFn: stubSpawn(calls) });
-    assert.deepEqual(result, { delivered: false, transport: null, warning: "no port; mailbox only" });
-    assert.deepEqual(calls, []);
-  } finally {
-    if (previous === undefined) delete process.env.OC_WORKCOORDINATE_PORT;
-    else process.env.OC_WORKCOORDINATE_PORT = previous;
-  }
-});
-
-test("the opencode transport runs against the configured port and tree", async () => {
-  const calls = [];
-  const result = await deliverBySessionRef("opencode:s1", message, {
-    spawnFn: stubSpawn(calls),
-    portFor: () => "4091",
-    dir: "/tmp/tree",
-  });
-  assert.deepEqual(calls, [[
-    "opencode",
-    ["run", "--session", "s1", "--dir", "/tmp/tree", "--port", "4091"],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  ]]);
-  assert.deepEqual(result, { delivered: true, transport: "opencode-run", warning: null });
 });
 
 test("deliverMessage routes through the registry without changing its entry shape", async () => {
