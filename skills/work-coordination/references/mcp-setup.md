@@ -73,6 +73,7 @@ claude mcp add work-coordination -- node <repo>/mcp/src/index.mjs
 | `observe` | Declare presence under typed work (`work`, `session`, `harness`, `directory`) |
 | `message` | Advisory message (`body`, `work`, `from`, `session`, `group`, `status`, `to`, `deliver`, `idle_timeout_ms`) |
 | `sessions`, `work` | Read participants and messages |
+| `policy` | Visibility rules (`action`: `add`, `remove`, `list`, `defaults`; deny only, first match wins) |
 | `groups`, `group_create`, `group_join`, `group_messages`, `ungroup` | Ephemeral group lifecycle |
 | `subscribe`, `unsubscribe`, `subscriptions` | Lane subscriptions |
 | `pending`, `retry` | Deliveries that did not land, and draining them |

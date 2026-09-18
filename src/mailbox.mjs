@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { reviseJsonFile } from "./atomic-json.mjs";
 import { messagesMatching } from "./state.mjs";
+import { messageVisible, policyDecide, refSubject } from "./policy.mjs";
 
 function mailboxFile(store, sessionRef) {
   const safe = String(sessionRef).replace(/[^a-zA-Z0-9:_-]/g, "_");
@@ -29,11 +30,16 @@ function watermark(store, sessionRef) {
 }
 
 // unreadFor returns the messages addressed to sessionRef that were
-// created after the recipient's watermark, oldest first.
+// created after the recipient's watermark, oldest first. The visibility
+// policy applies twice: a reader whose own ref is denied sees nothing at
+// all, and a message either of whose ends (sender or recipient) is denied
+// is withheld — a deny hides the mail in both directions.
 export function unreadFor(store, sessionRef) {
   if (!sessionRef) return [];
+  if (!policyDecide(store, refSubject(sessionRef), "read").allowed) return [];
   return messagesMatching(store, "to", sessionRef).filter(
-    (message) => Number(message.createdAt ?? 0) > watermark(store, sessionRef),
+    (message) => messageVisible(store, message)
+      && Number(message.createdAt ?? 0) > watermark(store, sessionRef),
   );
 }
 

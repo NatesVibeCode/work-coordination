@@ -34,6 +34,10 @@ A destination (`--to`, or a group member) is compared case-insensitively:
 | `subscribe` | writes | `--session`, `--work`, `--to` | — |
 | `unsubscribe` | writes | — | subscription id |
 | `sessions` | reads | — | — |
+| `policy-add deny` | writes | `--repo`, `--ref`, `--session`, `--note` | the literal `deny` |
+| `policy-remove` | writes | — | rule id |
+| `policy-list` | reads | — | — |
+| `policy-defaults` | writes | — | — |
 | `groups` | reads | — | — |
 | `subscriptions` | reads | — | — |
 | `pending` | reads | — | — |
@@ -43,6 +47,18 @@ A destination (`--to`, or a group member) is compared case-insensitively:
 
 `--decay-ms` is the pre-rename spelling of `--expiry-ms` and still works.
 `init` never needs a session or a work ref.
+
+## Visibility policy
+
+`policy-add deny` writes a deny rule matched by case-insensitive **prefix** on
+`--repo` (the session's tree basename or title), `--ref` (a session ref), or
+`--session` (a session id); at least one is required, and the first matching
+rule wins. With no matching rule everything is allowed — the operator writes
+deny rules only, never allow rules. A deny hides a session from `sessions`,
+withholds a message from mailboxes in both directions, refuses a delivery to
+the target, and withholds a denied session's records from `work`.
+`policy-defaults` installs the operator's baseline (deny `repo~ Praxis Active`)
+and installing twice does not duplicate the rule.
 
 ## Parsing rules
 

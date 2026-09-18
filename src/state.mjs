@@ -395,7 +395,7 @@ const FANOUT_STATUSES = ["blocked", "done"];
 // wait behind: each delivery has its own idle timeout, and N of them run
 // together instead of end to end. Results keep the order they were built in,
 // so callers render a stable list.
-export async function notifySubscribers(store, message = {}, { spawnFn, idleTimeoutMs, concurrency = 8 } = {}) {
+export async function notifySubscribers(store, message = {}, { spawnFn, idleTimeoutMs, concurrency = 8, store: policyStore = null } = {}) {
   const status = String(message.status ?? "").trim().toLowerCase();
   const sessionRef = String(message.sessionRef ?? "").trim();
   if (!FANOUT_STATUSES.includes(status) || !sessionRef) return [];
@@ -404,6 +404,7 @@ export async function notifySubscribers(store, message = {}, { spawnFn, idleTime
   const options = {};
   if (spawnFn !== undefined) options.spawnFn = spawnFn;
   if (idleTimeoutMs !== undefined) options.idleTimeoutMs = idleTimeoutMs;
+  if (policyStore) options.store = policyStore;
   const pending = [];
   const notified = new Set();
   for (const value of loadSubscriptions(store)) {

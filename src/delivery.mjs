@@ -1,5 +1,6 @@
 import { spawn as systemSpawn } from "node:child_process";
 import { transportForSessionRef } from "./transports.mjs";
+import { policyRefusal, refSubject } from "./policy.mjs";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -37,12 +38,20 @@ export async function mapBounded(items, limit, operation) {
 // the delivery to whatever transport answers for that harness. A harness
 // nobody registered a transport for is the mailbox-only case: the message is
 // still stored, so the report says no push transport exists.
-export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTimeoutMs = 60_000, ...transportOptions } = {}) {
+//
+// Callers that pass the store get the visibility policy enforced here, so
+// every delivery path (explicit target, fan-out, group, retry) refuses a
+// denied destination the same way, before any transport is consulted.
+export async function deliverMessage(input = {}, { spawnFn = systemSpawn, idleTimeoutMs = 60_000, store = null, ...transportOptions } = {}) {
   const harness = text(input.harness).toLowerCase();
   const sessionRef = text(input.sessionRef);
   const message = String(input.message ?? "");
   if (!harness || !sessionRef || !message) {
     return { delivered: false, transport: null, warning: "message destination unavailable" };
+  }
+  if (store) {
+    const refusal = policyRefusal(store, refSubject(`${harness}:${sessionRef}`), "message");
+    if (refusal) return { delivered: false, transport: null, warning: refusal };
   }
   const route = transportForSessionRef(`${harness}:${sessionRef}`);
   if (!route) {

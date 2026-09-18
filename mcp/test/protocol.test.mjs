@@ -37,7 +37,7 @@ async function loadWiring() {
   return { loadConfig, buildServer };
 }
 
-const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "roadmap", "pending", "retry"];
+const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "policy", "roadmap", "pending", "retry"];
 
 async function linkedClient(t, trees, buildServer, loadConfig) {
   const root = mkdtempSync(join(tmpdir(), "work-coordination-protocol-"));

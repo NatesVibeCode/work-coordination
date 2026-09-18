@@ -24,6 +24,10 @@ import {
   storeDirectoryForTree,
   storeForTree,
   listOutboxOp,
+  policyAddOp,
+  policyDefaultsOp,
+  policyListOp,
+  policyRemoveOp,
   retryOutboxOp,
   subscribeOp,
   unsubscribeOp,
@@ -52,6 +56,9 @@ const HELP = [
   "  ungroup <group>                       remove a group",
   "  subscribe --session <id> --to <h>:<id> [--work <ref>]   send that session's reports",
   "  unsubscribe <id>                      remove a subscription",
+  "  policy-add deny --repo <p> --ref <p> --session <p> [--note <t>]   add a visibility deny rule",
+  "  policy-remove <id> | policy-list      manage those rules (first match wins)",
+  "  policy-defaults                       install the operator's baseline deny rules",
   "  roadmap <key>                         read a roadmap item, read-only",
   "statuses: started, milestone, blocked, done (only blocked and done notify)",
   "--state <path> pins the store; there is no home-directory store",
@@ -99,6 +106,10 @@ const COMMANDS = {
   subscriptions: { mode: READ, flags: [] },
   pending: { mode: READ, flags: [] },
   retry: { mode: WRITE, flags: [valueFlag("--idle-timeout-ms")] },
+  "policy-add": { mode: WRITE, flags: [valueFlag("--repo"), valueFlag("--ref"), valueFlag("--session"), valueFlag("--note")] },
+  "policy-remove": { mode: WRITE, flags: [] },
+  "policy-list": { mode: READ, flags: [] },
+  "policy-defaults": { mode: WRITE, flags: [] },
   groups: { mode: READ, flags: [] },
   sessions: { mode: READ, flags: [] },
   roadmap: { mode: READ, flags: [] },
@@ -307,6 +318,17 @@ async function run(commandName, args, explicitState) {
   }
   if (commandName === "groups") return listGroups(store);
   if (commandName === "sessions") return listSessions(store);
+  if (commandName === "policy-add") {
+    const ruleHelp = "policy-add deny --repo <prefix> --ref <prefix> --session <prefix> [--note <text>]";
+    const verb = positional.shift();
+    if (verb !== "deny") usage("policy-add only writes deny rules", ruleHelp);
+    const rule = policyAddOp(store, { repo: value("--repo"), ref: value("--ref"), session: value("--session"), note: value("--note") });
+    if (!rule) usage("policy-add needs at least one of --repo, --ref, --session", ruleHelp);
+    return rule;
+  }
+  if (commandName === "policy-remove") return policyRemoveOp(store, positional.join(" "));
+  if (commandName === "policy-list") return policyListOp(store);
+  if (commandName === "policy-defaults") return policyDefaultsOp(store);
   if (commandName === "observe") {
     return observe(store, {
       workRef: value("--work"),

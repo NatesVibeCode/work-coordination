@@ -14,6 +14,10 @@ import {
   listSessions,
   listSubscriptionsOp,
   observe as observeOp,
+  policyAddOp,
+  policyDefaultsOp,
+  policyListOp,
+  policyRemoveOp,
   retryOutboxOp,
   sendAdvisory,
   showWork,
@@ -172,6 +176,31 @@ server.registerTool("subscriptions", {
   description: "List subscriptions in one filetree.",
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listSubscriptionsOp(store))));
+
+// One tool for the visibility rules: deny rules only (the default posture is
+// allow), first matching rule wins. `add` needs at least one of repo/ref/session
+// as a prefix; `remove` needs the rule id; `defaults` installs the operator's
+// baseline; `list` shows what a refusal will name.
+server.registerTool("policy", {
+  description: "Manage session visibility rules. Deny rules only; first match wins; no match allows. Deny hides sessions from listings, withholds messages from mailboxes in both directions, and refuses deliveries.",
+  inputSchema: {
+    tree: Tree,
+    action: z.enum(["add", "remove", "list", "defaults"]),
+    repo: z.string().optional(),
+    ref: z.string().optional(),
+    session: z.string().optional(),
+    note: z.string().optional(),
+    id: z.string().optional(),
+  },
+}, async ({ tree, action, repo, ref, session, note, id }) => text(await run(tree, (store) => {
+  if (action === "add") {
+    const rule = policyAddOp(store, { repo, ref, session, note });
+    return rule ?? "policy-add needs at least one of repo, ref, session";
+  }
+  if (action === "remove") return policyRemoveOp(store, id);
+  if (action === "defaults") return policyDefaultsOp(store);
+  return policyListOp(store);
+})));
 
 // The queue a failed delivery goes into. Without these two, an MCP client
 // could cause a pending delivery and never see or drain it.

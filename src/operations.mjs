@@ -23,6 +23,16 @@ import {
   subscriptionState,
   unsubscribe,
 } from "./state.mjs";
+import {
+  addPolicyRule,
+  installPolicyDefaults,
+  listPolicyRules,
+  messageVisible,
+  policyDecide,
+  removePolicyRule,
+  renderPolicyRule,
+  sessionSubject,
+} from "./policy.mjs";
 
 // Every operation takes a store and returns the exact text the CLI prints
 // (no trailing newline). bin/ writes it; the MCP server returns it. One
@@ -74,7 +84,7 @@ export async function sendAdvisory(store, { body, workRef, sender, sessionRef, t
   if (message === false) return "message body unavailable";
   if (!message) return groupState(store, groupRef) === "expired" ? "group expired" : "group unavailable";
   const lines = [renderMessage(message)];
-  const deliveryOptions = { ...(idleTimeoutMs === undefined || idleTimeoutMs === null ? {} : { idleTimeoutMs }), ...(spawnFn ? { spawnFn } : {}) };
+  const deliveryOptions = { ...(idleTimeoutMs === undefined || idleTimeoutMs === null ? {} : { idleTimeoutMs }), ...(spawnFn ? { spawnFn } : {}), store };
   for (const result of await notifySubscribers(store, message, deliveryOptions)) {
     lines.push(result.delivered ? `notified ${result.target} · delivery accepted · ${result.transport}` : `notified ${result.target} · delivery unavailable · ${result.warning}`);
   }
@@ -107,27 +117,39 @@ export async function sendAdvisory(store, { body, workRef, sender, sessionRef, t
   return lines.join("\n");
 }
 
+// The listing is visibility-filtered: a session whose record a policy rule
+// denies is not shown at all, not shown redacted.
 export function listSessions(store) {
-  const sessions = observedSessions(store);
+  const sessions = observedSessions(store)
+    .filter((record) => policyDecide(store, sessionSubject(record), "list").allowed);
   return sessions.length ? sessions.map((value) => `${oneLine(value.sessionRef)}${value.workRef ? ` · ${oneLine(value.workRef)}` : ""}`).join("\n") : "no sessions observed";
 }
 
 export function showWork(store, workRef) {
   const view = workView(store, workRef);
   const messages = messagesForWork(store, workRef);
-  const participants = view?.participants ?? [];
-  if (participants.length || messages.length) {
+  // A policy deny on a participant or on either end of a message withholds
+  // that record from the read, the same way it is withheld from a listing
+  // and a mailbox.
+  const participants = (view?.participants ?? []).filter((record) => policyDecide(store, sessionSubject(record), "read").allowed);
+  const visible = messages.filter((message) => messageVisible(store, message));
+  if (participants.length || visible.length) {
     const header = `Work · ${oneLine(workRef) || "unknown"}`;
     const people = participants.length ? participants.map((value) => oneLine(value.sessionRef)).join(", ") : "none observed";
-    const rendered = messages.length ? withoutBoilerplate(messages.map(renderMessage).join("\n\n")) : "no messages observed";
+    const rendered = visible.length ? withoutBoilerplate(visible.map(renderMessage).join("\n\n")) : "no messages observed";
     return `${header}\nparticipants · ${people}\n\n${rendered}`;
   }
   // Records are stored normalized, so the expired-vs-missing lookup has to ask
   // with the same normalized ref — otherwise a padded ref reports "no context"
   // for a work whose records merely aged out.
   const ref = oneLine(workRef);
-  const expired = rawMessagesForWork(store, ref).length > 0 || allObservations(store).some((record) => record.workRef === ref);
-  return expired ? "work expired" : "no work context observed";
+  const rawMessages = rawMessagesForWork(store, ref);
+  const rawParticipants = allObservations(store).filter((record) => record.workRef === ref);
+  const expired = rawMessages.length > 0 || rawParticipants.length > 0;
+  const withheld = expired
+    && (rawMessages.some((message) => !messageVisible(store, message))
+      || rawParticipants.some((record) => !policyDecide(store, sessionSubject(record), "read").allowed));
+  return expired ? (withheld ? "work context withheld by policy" : "work expired") : "no work context observed";
 }
 
 export function listGroups(store) {
@@ -187,7 +209,7 @@ export function listOutboxOp(store) {
 export async function retryOutboxOp(store, { spawnFn, idleTimeoutMs } = {}) {
   const entries = listOutbox(store);
   if (!entries.length) return "no pending deliveries";
-  const options = { concurrency: 4 };
+  const options = { concurrency: 4, store };
   if (spawnFn !== undefined) options.spawnFn = spawnFn;
   if (idleTimeoutMs !== undefined && idleTimeoutMs !== null) options.idleTimeoutMs = idleTimeoutMs;
 
@@ -214,4 +236,24 @@ export async function retryOutboxOp(store, { spawnFn, idleTimeoutMs } = {}) {
   const lines = [...delivered.map((attempt) => `delivered · ${attempt.entry.target} · ${attempt.transport ?? "transport"}`),
     ...failed.map((attempt) => `still pending · ${attempt.entry.target} · ${attempt.warning ?? "unavailable"}`)];
   return lines.length ? lines.join("\n") : "no pending deliveries";
+}
+
+// Visibility rules. Writing is deny-only — the default posture is already
+// allow — and reading lists what a refusal will name.
+export function policyAddOp(store, { repo, ref, session, note } = {}) {
+  const rule = addPolicyRule(store, { repo, ref, session, note });
+  return rule ? renderPolicyRule(rule) : null;
+}
+
+export function policyRemoveOp(store, ruleId) {
+  return removePolicyRule(store, ruleId) ? "policy rule removed" : "policy rule unavailable";
+}
+
+export function policyListOp(store) {
+  const rules = listPolicyRules(store);
+  return rules.length ? rules.map(renderPolicyRule).join("\n") : "no policy rules";
+}
+
+export function policyDefaultsOp(store) {
+  return installPolicyDefaults(store);
 }
