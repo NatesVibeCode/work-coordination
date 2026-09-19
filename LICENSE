@@ -1,22 +1,21 @@
-Work Coordination Community License v1.0
-Copyright (c) 2026 Nate Roybal <nathanaroybal@gmail.com>
+MIT License
 
-1. Free use grant. You may use, copy, modify, and distribute this software,
-   including inside a business and in internal tools, free of charge, provided
-   this license notice accompanies every copy or substantial portion.
+Copyright (c) 2026 Nate Roybal
 
-2. Selling requires a commercial license. If you sell anything built on top of
-   this software — a product, a paid service, or a hosted offering that embeds
-   or derives from it — you need a separate commercial license from the author.
-   Ordinary use inside a business you work for is not selling; reselling the
-   software's capability to others is.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-3. Contact. To buy a commercial license, contact the author at the address above.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-4. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY AND FITNESS
-   FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM,
-   DAMAGES, OR OTHER LIABILITY ARISING FROM THE SOFTWARE.
-
-Note: this is a plain-language source-available license, not an OSI-approved
-open-source license. If your use is borderline, ask before shipping.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

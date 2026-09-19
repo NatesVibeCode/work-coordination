@@ -2,7 +2,14 @@
   "name": "work-coordination",
   "version": "0.1.0",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NatesVibeCode/work-coordination.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NatesVibeCode/work-coordination/issues"
+  },
   "files": [
     "bin",
     "src",

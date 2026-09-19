@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "MCP server exposing work-coordination as tools, with per-filetree visibility",
   "private": true,
-  "license": "SEE LICENSE IN ../LICENSE",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "work-coordination-mcp": "./src/index.mjs"

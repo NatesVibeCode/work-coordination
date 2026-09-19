@@ -275,6 +275,4 @@ keeps everything for audit — that is the default. Two things to know:
 
 ## License
 
-Source-available under the [Work Coordination Community License](LICENSE):
-free for personal or business use; selling something built on top needs a
-commercial license.
+[MIT](LICENSE).
