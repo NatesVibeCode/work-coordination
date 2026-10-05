@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { oneLine, textField } from "./coordination.mjs";
-import { NO_WRITE, reviseJsonFile } from "./atomic-json.mjs";
+import { NO_WRITE, readJsonFile, reviseJsonFile } from "./atomic-json.mjs";
 
 // Visibility policy. A small rules file in the store decides which sessions
 // are visible to which operations: a `sessions` listing hides denied records,
@@ -21,12 +20,8 @@ export function policyPath(store) {
 }
 
 function readRules(store) {
-  try {
-    const value = JSON.parse(readFileSync(policyPath(store), "utf8"));
-    return Array.isArray(value?.rules) ? value.rules : [];
-  } catch {
-    return [];
-  }
+  const value = readJsonFile(policyPath(store), { rules: [] });
+  return Array.isArray(value?.rules) ? value.rules : [];
 }
 
 export function listPolicyRules(store) {

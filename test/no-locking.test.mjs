@@ -10,7 +10,7 @@ import { storeForTree, observe, sendAdvisory, createGroupOp, joinGroupOp, subscr
 // This pins the removal — the module is gone and no lock, reclaim, or
 // owner artifact is ever produced inside a store, even under a full
 // observe/message/group/subscribe cycle.
-test("locking is gone and no lock artifacts are produced", async (t) => {
+test("locking is gone and state stores contain only JSON records", async (t) => {
   assert.equal(existsSync(fileURLToPath(new URL("../src/locking.mjs", import.meta.url))), false);
 
   const tree = mkdtempSync(join(tmpdir(), "work-coordination-no-locking-"));
@@ -24,13 +24,16 @@ test("locking is gone and no lock artifacts are produced", async (t) => {
   subscribeOp(store, { sessionRef: "s", target: "smoke:x" });
 
   const artifacts = [];
+  const files = [];
   const walk = (directory) => {
     for (const entry of readdirSync(directory)) {
       const path = join(directory, entry);
       if (entry.startsWith(".lock-") || entry.startsWith(".reclaim-") || entry === "owner.json") artifacts.push(path);
       else if (statSync(path).isDirectory()) walk(path);
+      else files.push(path);
     }
   };
   walk(store.directory);
   assert.deepEqual(artifacts, []);
+  assert.deepEqual(files.filter((path) => !path.endsWith(".json")), [], "every durable file is a JSON state record");
 });

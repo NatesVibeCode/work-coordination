@@ -10,19 +10,23 @@ the ones a fresh session gets wrong.
 ## The invariants
 
 **1. No locking. Ever.** No lock file, no lease, no owner/PID claim, no reclaim
-marker, no advisory lock, and no path where one writer waits on another. The
-store is lock-free optimistic concurrency: read, compute, rename into place only
-if nobody wrote in between, retry briefly, then throw and report it. If you find
-yourself reaching for a mutex or a `.lock` file, the answer is a compare-and-swap
-in `src/atomic-json.mjs`. `test/no-locking.test.mjs` walks a store after a full
-cycle and fails on any non-state artifact.
+marker, no advisory lock, and no path where one writer waits on another.
+Mutable JSON collections use immutable `.json` mutation records with a
+deterministic three-way fold in `src/atomic-json.mjs`; independent entity
+changes merge, while divergent same-entity revisions remain visible as typed
+conflicts. This is not an atomic compare-and-swap: a read and an append cannot
+be one operation without a lock. A mutation journal is capped at 16,384
+records and refuses further writes at the bound. `state-status` reports
+conflicts and incomplete state. `test/no-locking.test.mjs` walks a fresh store
+after a full cycle and fails on any non-JSON file or lock artifact.
 
-**2. A store holds state records and nothing else.** No scratch files, no
-temporaries left behind, no sidecars. Every replacement goes through
-`replaceFile`/`replaceJsonFile`/`reviseJsonFile` in `src/atomic-json.mjs`, which
-use a unique scratch name (pid + thread + counter + random) and clean up on a
-failed rename. Never hand-roll `${path}.${pid}.tmp` — that collision was a real
-bug twice.
+**2. A store holds state records and nothing else.** No scratch files,
+temporaries left behind, or untyped sidecars. New immutable records use
+`writeJsonRecord`; mutable JSON uses `replaceJsonFile`/`reviseJsonFile` and
+immutable mutation records through `src/atomic-json.mjs`. Every durable file
+is JSON. Never hand-roll `${path}.${pid}.tmp` — that collision was a real bug
+twice. `replaceFile` remains for non-journal/legacy migration only and does
+not provide inter-process conditional-update semantics.
 
 **3. One implementation, two frontends.** All behaviour lives in
 `src/operations.mjs` and `src/state.mjs`. The CLI parses argv and prints; the MCP
@@ -57,7 +61,7 @@ pushed. Report a history problem; do not force-push it away.
 | `bin/work-coordination.mjs` | argv parsing, flag tables, exit codes, printing |
 | `src/operations.mjs` | the operations the CLI prints and the MCP server returns |
 | `src/state.mjs` | store resolution, records, groups, subscriptions, fan-out |
-| `src/atomic-json.mjs` | lock-free replacement primitives (start here) |
+| `src/atomic-json.mjs` | immutable JSON mutation records and deterministic fold (start here) |
 | `src/coordination.mjs` | record shapes, `oneLine` sanitizer, `destinationOf` |
 | `src/delivery.mjs` | harness transports, idle timeout, bounded fan-out |
 | `src/outbox.mjs` | deliveries that did not land |

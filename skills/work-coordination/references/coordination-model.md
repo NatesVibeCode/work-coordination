@@ -61,24 +61,34 @@ it is checked out beside this repo).
 
 ## Storage
 
-A store is a `.work-coordination/` directory: `0700`, with `0600` files
-inside. It holds `participation.jsonl`, `messages/*.json`, `groups.json`,
-`members.jsonl`, `subscriptions.json`, `outbox.json`, and optionally
-`config.json`.
+A store is a `.work-coordination/` directory: `0700`, with `0600` JSON state
+records inside. New observations, group memberships, messages, and mailbox
+receipts are immutable per-record JSON. Mutable collections use a small
+`<state-file>.journal/` of immutable JSON mutations and a deterministic fold.
+Older JSONL and snapshot files remain readable; `state-status` identifies
+legacy logs and reports damaged or conflicting records.
 
-- Observations and memberships are **append-only logs**. Readers fold them, so
-  concurrent observers and joins cannot lose each other.
-- Messages are one file per record; group and subscription records are
-  compare-and-swap JSON.
-- Writes are **lock-free**: read, compute, rename into place only if nobody
-  wrote in between, retry briefly, then report a conflict. There is no lock
-  file, no lease, no owner claim, and no writer ever waits on another.
-- A store contains state records and nothing else — no scratch files, no
-  lock artifacts.
-- `outbox.json` is the queue of deliveries that did not land. It is state, not
-  a daemon: nothing drains it on a schedule, `retry` does, and an entry is
-  retired by a successful delivery to that destination or by the retention
-  window.
+- No file lock, lease, session claim, or wait is used. A journal append is
+  write-once. Independent entity changes merge; divergent changes to one
+  entity remain in the journal and show as `state · conflict` instead of
+  silently replacing each other. This is optimistic merge, not an atomic
+  compare-and-swap.
+- An incomplete or unknown JSON record is not treated as absent. Reads report
+  `state · unknown` through `state-status`; mutation paths refuse a damaged
+  journal. Each mutation journal is capped at 16,384 records and reports a
+  state limit rather than growing without bound.
+- Message filenames use SHA-256 of the complete sanitized message ID.
+  Mailbox directories use SHA-256 of the complete normalized recipient and
+  acknowledge each exact immutable message ID. Equal timestamps cannot hide
+  a different message, and punctuation cannot collide through filename
+  sanitization.
+- New writes are JSON only. Expired message and outbox items, expired groups
+  and subscriptions, and orphaned member records are reclaimed through their
+  existing bounded retention paths. Legacy JSONL remains read-only.
+- The outbox is advisory state, not a daemon: nothing drains it on a schedule,
+  `retry` does, and a successful delivery retires pending work for that
+  destination. A concurrent failure and success can remain uncertain; inspect
+  `state-status` before treating a conflicting journal as settled.
 
 ## Expiry
 

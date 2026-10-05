@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { destinationOf, oneLine, renderMessage, withoutBoilerplate } from "./coordination.mjs";
+import { inspectJsonStateDirectory } from "./atomic-json.mjs";
 import { bumpAttempt, clearFailure, listOutbox, settle } from "./outbox.mjs";
 import { deliverMessage, mapBounded } from "./delivery.mjs";
 import { deliverGroupMessage } from "./group-delivery.mjs";
@@ -123,6 +124,30 @@ export function listSessions(store) {
   const sessions = observedSessions(store)
     .filter((record) => policyDecide(store, sessionSubject(record), "list").allowed);
   return sessions.length ? sessions.map((value) => `${oneLine(value.sessionRef)}${value.workRef ? ` · ${oneLine(value.workRef)}` : ""}`).join("\n") : "no sessions observed";
+}
+
+// Journal conflicts and damaged records remain visible as uncertainty. This
+// is a read-only diagnostic; it does not elect a writer, repair state, or
+// authorize delivery.
+export function stateStatus(store) {
+  const report = inspectJsonStateDirectory(store.directory);
+  const lines = [];
+  for (const conflict of report.conflicts) {
+    const relative = String(conflict.base ?? "").startsWith(store.directory)
+      ? String(conflict.base).slice(store.directory.length).replace(/^\//, "")
+      : conflict.base;
+    lines.push(`state · conflict · ${oneLine(relative)} · ${oneLine(conflict.path)} · event ${oneLine(conflict.eventId)}`);
+  }
+  for (const gap of report.gaps) {
+    const relative = String(gap.file ?? "").startsWith(store.directory)
+      ? String(gap.file).slice(store.directory.length).replace(/^\//, "")
+      : gap.file;
+    lines.push(`state · gap · ${oneLine(relative)} · ${oneLine(gap.reason)}`);
+  }
+  for (const old of report.legacy) {
+    if (old.records) lines.push(`state · legacy · ${oneLine(String(old.file).slice(store.directory.length).replace(/^\//, ""))} · ${old.records} readable JSONL records`);
+  }
+  return lines.length ? lines.slice(0, 32).join("\n") : "state · consistent";
 }
 
 export function showWork(store, workRef) {

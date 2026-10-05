@@ -76,8 +76,10 @@ test("records preserve exact SDK case revision and result references as nonexclu
   assert.match(listBusinessCasesOp(store), /claude:session-b/);
 
   const files = readdirSync(directory).sort();
-  assert.deepEqual(files, ["business-cases.json", "messages"]);
-  assert.doesNotThrow(() => JSON.parse(readFileSync(join(directory, "business-cases.json"), "utf8")));
+  assert.deepEqual(files, ["business-cases.json.journal", "messages"]);
+  const journal = readdirSync(join(directory, "business-cases.json.journal"));
+  assert.equal(journal.length, 2, "each accepted observation is retained as an immutable JSON mutation");
+  for (const file of journal) assert.equal(JSON.parse(readFileSync(join(directory, "business-cases.json.journal", file), "utf8")).schema, "work-coordination.json-mutation.v1");
 }));
 
 test("all stored and rendered user strings pass through oneLine and remain one field", () => withStore((store) => {

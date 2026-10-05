@@ -1,7 +1,8 @@
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { activeGroup, createMessage, destinationOf, oneLine, renderMessage, textField } from "./coordination.mjs";
-import { NO_WRITE, replaceFile, replaceJsonFile, reviseJsonFile } from "./atomic-json.mjs";
+import { identityHash, NO_WRITE, readJsonFile, replaceJsonFile, reviseJsonFile, StateConflictError, writeJsonRecord } from "./atomic-json.mjs";
 import { deliverMessage, mapBounded } from "./delivery.mjs";
 import { clearFailure, pruneOutbox, recordFailure } from "./outbox.mjs";
 
@@ -11,35 +12,35 @@ function ensure(directory) {
 }
 
 function readJson(path, fallback) {
-  try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
+  try { return readJsonFile(path, fallback); } catch (error) {
+    if (error?.code === "ENOENT") return fallback;
+    throw error;
+  }
 }
 
-// Every replacement goes through the shared scratch helper: a temp file named
-// only by process id is one two writers can share.
+// Mutable logical JSON goes through the immutable mutation journal in
+// atomic-json.mjs; direct replacement remains only for compatibility.
 function writeJson(path, value) {
   replaceJsonFile(path, value);
 }
 
-let idCounter = 0;
-
 // A record's file name is its id, so an id that repeats silently overwrites a
-// record. The default source is a fresh Math.random float; a caller that
-// injects its own source is a test seam whose short values must stay
-// byte-identical, so only the default gains the uniqueness tail.
+// record. Injected random sources remain a deterministic test seam; native
+// identities use a full process-safe UUID.
 function id(prefix, random) {
+  if (random === Math.random) return `${prefix}_${randomUUID().replace(/-/g, "")}`;
   const suffix = String(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local";
-  if (random !== Math.random) return `${prefix}_${suffix}`;
-  idCounter = (idCounter + 1) % Number.MAX_SAFE_INTEGER;
-  return `${prefix}_${suffix.slice(0, 8)}${Date.now().toString(36)}${idCounter.toString(36)}`;
+  return `${prefix}_${suffix}`;
 }
 
 export function loadStoreConfig(directory) {
   try {
-    const raw = JSON.parse(readFileSync(join(String(directory), "config.json"), "utf8"));
+    const raw = readJsonFile(join(String(directory), "config.json"), {});
     // decayMs is the pre-rename key; it still loads so early stores survive.
     const expiryMs = Number(raw?.expiryMs ?? raw?.decayMs);
     return { expiryMs: expiryMs > 0 ? expiryMs : null };
-  } catch {
+  } catch (error) {
+    if (error?.code === "STATE_UNKNOWN") throw error;
     return { expiryMs: null };
   }
 }
@@ -90,7 +91,7 @@ export function sendMessage(store, input = {}, options = {}) {
   if (!oneLine(input.body)) return false;
   const persist = () => {
     const message = createMessage(input, options);
-    writeJson(join(store.messages, `${message.ref}.json`), message);
+    writeJsonRecord(join(store.messages, `${identityHash("message", message.ref)}.json`), message);
     pruneExpiredMessages(store);
     return message;
   };
@@ -159,32 +160,69 @@ function loadGroups(store) {
   return Array.isArray(value) ? value : [];
 }
 
-function memberLogPath(store) {
-  return join(store.directory, "members.jsonl");
+function memberDirectory(store) {
+  return join(store.directory, "members");
 }
 
-function readMemberLog(store) {
-  let raw;
-  try {
-    raw = readFileSync(memberLogPath(store), "utf8");
-  } catch {
-    return [];
-  }
+function readMemberRecords(store) {
   const entries = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry && typeof entry.group === "string" && typeof entry.member === "string") entries.push(entry);
-    } catch {}
-  }
+  try {
+    for (const file of readdirSync(memberDirectory(store), { withFileTypes: true })) {
+      if (!file.isFile() || !file.name.endsWith(".json")) continue;
+      try {
+        const entry = JSON.parse(readFileSync(join(memberDirectory(store), file.name), "utf8"));
+        if (entry?.schema === "work-coordination.group_member.v1" && typeof entry.group === "string" && typeof entry.member === "string") entries.push(entry);
+      } catch {}
+    }
+  } catch {}
+  // Read-only compatibility for stores created before membership records were
+  // individual JSON state files. New writes never append to this legacy log.
+  try {
+    const legacy = readFileSync(join(store.directory, "members.jsonl"), "utf8");
+    for (const line of legacy.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry && typeof entry.group === "string" && typeof entry.member === "string") entries.push(entry);
+      } catch {}
+    }
+  } catch {}
   return entries;
 }
 
-// Membership is append-only: a join is one atomic append, never a
-// read-modify-write, so concurrent joins cannot lose each other and nothing
-// ever waits. Readers fold the log over the record's base members, which
-// keeps legacy stores working — their members are simply the base.
+function groupGeneration(group) {
+  return String(group?.generation ?? identityHash("legacy-group", group?.id ?? "", group?.createdAt ?? 0, group?.expiresAt ?? 0, group?.name ?? null));
+}
+
+function memberRecordPath(store, group, member) {
+  return join(memberDirectory(store), `${identityHash(group.id, groupGeneration(group), member)}.json`);
+}
+
+function memberEntriesFor(store, group) {
+  return readMemberRecords(store).filter((entry) => entry.group === group?.id
+    && (entry.generation === undefined
+      ? Number(entry.at ?? 0) >= Number(group?.createdAt ?? 0)
+      : entry.generation === groupGeneration(group)));
+}
+
+function unlinkRecord(path) {
+  try { unlinkSync(path); } catch {}
+}
+
+function removeOrphanedMembers(store, liveGenerations) {
+  try {
+    for (const file of readdirSync(memberDirectory(store), { withFileTypes: true })) {
+      if (!file.isFile() || !file.name.endsWith(".json")) continue;
+      const path = join(memberDirectory(store), file.name);
+      let entry;
+      try { entry = JSON.parse(readFileSync(path, "utf8")); } catch { continue; }
+      if (!liveGenerations.has(`${entry?.group}\u0000${entry?.generation ?? ""}`)) unlinkRecord(path);
+    }
+  } catch {}
+}
+
+// Membership is append-only: one immutable JSON record per group generation
+// and member. Repeated or overlapping joins do not replace another member.
 function foldMembers(store, group) {
   const seen = new Set();
   const members = [];
@@ -196,23 +234,14 @@ function foldMembers(store, group) {
     }
   };
   for (const member of Array.isArray(group?.members) ? group.members : []) push(member);
-  for (const entry of readMemberLog(store)) {
-    if (entry.group === group?.id) push(entry.member);
-  }
+  for (const entry of memberEntriesFor(store, group).sort((left, right) => Number(left.at ?? 0) - Number(right.at ?? 0)
+    || String(left.member).localeCompare(String(right.member)))) push(entry.member);
   return members;
 }
 
-// Dead records are reclaimed when a new one is written, exactly the way stale
-// message files are reclaimed on arrival. Without this a store accumulated
-// expired groups and subscriptions forever — hidden from every read, still on
-// disk, and growing with each new record. Nothing a read can still see is
-// removed, so the expiry wording ("group expired" for a record inside the
-// retention window) is unaffected.
-//
-// Membership travels with its group: a group that has just been reclaimed
-// takes its member lines with it, which is the only reclamation the member log
-// ever gets. Lines belonging to groups that still exist are left alone, so a
-// concurrent join cannot lose its record to a prune.
+// Expiry removes groups/subscriptions from the current projection. Historical
+// mutation records remain as the source of truth up to each journal's bounded
+// capacity; orphaned member state is physically reclaimed by generation.
 function pruneExpiredRecords(store, { now = Date.now() } = {}) {
   const cutoff = expiryCutoff(store, now);
   reviseJsonFile(store.groups, [], (value) => {
@@ -230,20 +259,17 @@ function pruneExpiredRecords(store, { now = Date.now() } = {}) {
   pruneOrphanedMembers(store);
 }
 
-// A member line whose group is gone can never be read: every path to it goes
-// through a group record first. Reclaim those, and only those.
+// A member record whose exact group generation is gone can never be read.
+// Reclaim it; a later group reusing its public id has a different generation.
 function pruneOrphanedMembers(store) {
-  const entries = readMemberLog(store);
-  if (!entries.length) return;
-  const live = new Set((readJson(store.groups, []) ?? []).map((group) => group?.id));
-  const kept = entries.filter((entry) => live.has(entry.group));
-  if (kept.length === entries.length) return;
-  replaceFile(memberLogPath(store), kept.length ? `${kept.map((entry) => JSON.stringify(entry)).join("\n")}\n` : "");
+  const live = new Set((readJson(store.groups, []) ?? []).map((group) => `${group?.id}\u0000${groupGeneration(group)}`));
+  removeOrphanedMembers(store, live);
 }
 
 export function createGroup(store, input = {}, { now = Date.now(), random = Math.random, ttlMs = 60 * 60 * 1000 } = {}) {
   const group = {
     id: textField(input.id) || id("g", random),
+    generation: randomUUID(),
     name: textField(input.name) || null,
     members: [],
     createdAt: Number(now),
@@ -252,17 +278,18 @@ export function createGroup(store, input = {}, { now = Date.now(), random = Math
   pruneExpiredRecords(store, { now });
   reviseJsonFile(store.groups, [], (value) => {
     const groups = Array.isArray(value) ? value : [];
+    if (groups.some((existing) => existing?.id === group.id && activeGroup(existing, { now }))) {
+      throw new StateConflictError("group identity already has an active revision", { entity: "group", id: group.id });
+    }
     return [...groups, group];
   });
   return group;
 }
 
 // A join is refused for a group that is no longer addressable: missing, past
-// its TTL, or past the retention window. Membership is append-only and the
-// append is one atomic write, never a read-modify-write, so concurrent joins
-// cannot lose each other and nothing ever waits. Re-joining as a session that
-// is already a member appends nothing — the folded member set is unchanged,
-// so repeating a join must not grow the log.
+// its TTL, or past the retention window. Membership is an immutable JSON
+// record keyed by group generation and session identity, so independent joins
+// remain present and re-joining the same member writes no new record.
 export function joinGroup(store, groupId, sessionRef, options = {}) {
   const current = groupState(store, groupId, options);
   if (current !== "active") return null;
@@ -270,9 +297,14 @@ export function joinGroup(store, groupId, sessionRef, options = {}) {
   if (!record) return null;
   const member = textField(sessionRef);
   const members = foldMembers(store, record);
-  if (member && !members.includes(member)) {
-    appendFileSync(memberLogPath(store), `${JSON.stringify({ group: record.id, member, at: Number(options?.now ?? Date.now()) })}\n`, { mode: 0o600 });
-  }
+  if (member && !members.includes(member)) writeJsonRecord(memberRecordPath(store, record, member), {
+    schema: "work-coordination.group_member.v1",
+    id: identityHash(record.id, groupGeneration(record), member),
+    group: record.id,
+    generation: groupGeneration(record),
+    member,
+    at: Number(options?.now ?? Date.now()),
+  });
   return { ...record, members: foldMembers(store, record) };
 }
 
@@ -290,14 +322,9 @@ export function removeGroup(store, groupId) {
     return retained;
   });
   if (!removed) return false;
-  // Prune the log so a later group reusing this id starts empty. A join
-  // racing the prune may vanish from the log, but the record is gone either
-  // way, so nothing visible changes.
-  const kept = [];
-  for (const entry of readMemberLog(store)) {
-    if (entry.group !== id) kept.push(JSON.stringify(entry));
-  }
-  replaceFile(memberLogPath(store), kept.length ? `${kept.join("\n")}\n` : "");
+  // Membership is tied to the removed generation; a late join from a stale
+  // reader cannot attach to a later group that reuses the public id.
+  pruneOrphanedMembers(store);
   return removed;
 }
 
@@ -308,7 +335,7 @@ export function removeGroup(store, groupId) {
 export function groupState(store, groupId, options = {}) {
   const record = loadGroups(store).find((group) => group.id === String(groupId ?? ""));
   if (!record) return "missing";
-  const cutoff = expiryCutoff(store);
+  const cutoff = expiryCutoff(store, Number(options?.now ?? Date.now()));
   if (cutoff !== null && Number(record.createdAt ?? 0) < cutoff) return "expired";
   if (!activeGroup(record, options)) return "missing";
   return "active";
@@ -325,7 +352,7 @@ export function subscriptionState(store, subscriptionId) {
 }
 
 export function activeGroups(store, options = {}) {
-  const cutoff = expiryCutoff(store);
+  const cutoff = expiryCutoff(store, Number(options?.now ?? Date.now()));
   return loadGroups(store)
     .map((group) => activeGroup(group, options))
     .filter(Boolean)

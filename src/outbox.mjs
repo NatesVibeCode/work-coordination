@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { oneLine } from "./coordination.mjs";
-import { NO_WRITE, replaceJsonFile, reviseJsonFile } from "./atomic-json.mjs";
+import { NO_WRITE, readJsonStateFile, replaceJsonFile, reviseJsonFile, StateConflictError, StateUnknownError } from "./atomic-json.mjs";
 import { expiryCutoff } from "./state.mjs";
 
 // Deliveries that did not land.
@@ -22,12 +22,34 @@ export function outboxPath(store) {
 }
 
 function readOutbox(store) {
-  try {
-    const value = JSON.parse(readFileSync(outboxPath(store), "utf8"));
-    return Array.isArray(value) ? value : [];
-  } catch {
-    return [];
-  }
+  const snapshot = readJsonStateFile(outboxPath(store), []);
+  if (snapshot.gaps.length) throw new StateUnknownError(`state unknown: ${snapshot.gaps[0].reason}`, { path: outboxPath(store), gaps: snapshot.gaps });
+  if (snapshot.conflicts.length) throw new StateConflictError("outbox has conflicting revisions; retry is withheld", { path: outboxPath(store), conflicts: snapshot.conflicts });
+  return Array.isArray(snapshot.value) ? snapshot.value : [];
+}
+
+function publicEntry(entry) {
+  const attempts = Array.isArray(entry?.attemptRecords) ? entry.attemptRecords : null;
+  if (!attempts) return entry;
+  const latest = attempts.slice().sort((left, right) => Number(left.at ?? 0) - Number(right.at ?? 0) || String(left.id).localeCompare(String(right.id))).at(-1);
+  return { ...entry, attempts: attempts.length, lastAttemptAt: Number(latest?.at ?? entry.createdAt), lastWarning: latest?.warning ?? entry.lastWarning ?? null };
+}
+
+function attemptRecordsFor(entry) {
+  if (Array.isArray(entry?.attemptRecords)) return entry.attemptRecords;
+  const count = Math.max(1, Number(entry?.attempts ?? 1));
+  const output = [];
+  for (let index = 0; index < count - 1; index++) output.push({
+    id: `legacy:${entry?.createdAt ?? 0}:${index}`,
+    at: Number(entry?.createdAt ?? 0),
+    warning: entry?.lastWarning ?? null,
+  });
+  output.push({
+    id: `legacy:${entry?.lastAttemptAt ?? entry?.createdAt ?? 0}:last`,
+    at: Number(entry?.lastAttemptAt ?? entry?.createdAt ?? 0),
+    warning: entry?.lastWarning ?? null,
+  });
+  return output;
 }
 
 function keyOf(entry) {
@@ -36,11 +58,13 @@ function keyOf(entry) {
 
 // Oldest first: a queue you can read top-down, and the order to drain it in.
 export function listOutbox(store) {
-  return readOutbox(store).sort((left, right) => Number(left?.createdAt ?? 0) - Number(right?.createdAt ?? 0));
+  return readOutbox(store).map(publicEntry)
+    .sort((left, right) => Number(left?.createdAt ?? 0) - Number(right?.createdAt ?? 0))
+    .slice(-OUTBOX_LIMIT);
 }
 
 export function outboxCount(store) {
-  return readOutbox(store).length;
+  return listOutbox(store).length;
 }
 
 // Remember a delivery that did not land. Keyed by (message, destination), so
@@ -49,28 +73,27 @@ export function outboxCount(store) {
 // somebody meant to send, and only a successful delivery to that destination
 // (or the retention window) retires it. Growth is bounded by the cap.
 export function recordFailure(store, { messageRef, target, message, workRef, warning, now = Date.now() }) {
+  const attempt = { id: randomUUID(), at: Number(now), warning: oneLine(warning) || null };
   const entry = {
     messageRef: oneLine(messageRef),
     target: oneLine(target),
     message: String(message ?? ""),
     workRef: oneLine(workRef) || null,
-    attempts: 1,
     createdAt: Number(now),
     lastAttemptAt: Number(now),
     lastWarning: oneLine(warning) || null,
+    attemptRecords: [attempt],
   };
   if (!entry.messageRef || !entry.target || !entry.message) return null;
   reviseJsonFile(outboxPath(store), [], (value) => {
     const entries = Array.isArray(value) ? value : [];
     const existing = entries.find((candidate) => keyOf(candidate) === keyOf(entry));
     if (existing) {
-      // Same intent, another attempt: count it, do not duplicate it.
-      const updated = {
-        ...existing,
-        attempts: Number(existing.attempts ?? 0) + 1,
-        lastAttemptAt: Number(now),
-        lastWarning: entry.lastWarning,
-      };
+      // Each failed attempt is an immutable keyed item. Simultaneous retries
+      // therefore merge as two accepted observations instead of both writing
+      // the same incremented number.
+      const previous = attemptRecordsFor(existing);
+      const updated = { ...existing, attemptRecords: [...previous, attempt] };
       return entries.map((candidate) => (keyOf(candidate) === keyOf(entry) ? updated : candidate));
     }
     return [...entries, entry].slice(-OUTBOX_LIMIT);
@@ -95,6 +118,7 @@ export function clearFailure(store, { target }) {
 
 export function bumpAttempt(store, { messageRef, target, warning, now = Date.now() }) {
   const wanted = keyOf({ messageRef, target });
+  const attempt = { id: randomUUID(), at: Number(now), warning: oneLine(warning) || null };
   reviseJsonFile(outboxPath(store), [], (value) => {
     const entries = Array.isArray(value) ? value : [];
     let changed = false;
@@ -103,9 +127,7 @@ export function bumpAttempt(store, { messageRef, target, warning, now = Date.now
       changed = true;
       return {
         ...candidate,
-        attempts: Number(candidate.attempts ?? 0) + 1,
-        lastAttemptAt: Number(now),
-        lastWarning: oneLine(warning) || null,
+        attemptRecords: [...attemptRecordsFor(candidate), attempt],
       };
     });
     return changed ? kept : NO_WRITE;

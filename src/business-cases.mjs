@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { destinationOf, oneLine } from "./coordination.mjs";
-import { NO_WRITE, reviseJsonFile } from "./atomic-json.mjs";
+import { readJsonFile, reviseJsonFile, StateConflictError } from "./atomic-json.mjs";
 
 export const BUSINESS_CASE_VIEW_SCHEMA = "praxis.business_case_advisory_view.v1";
 export const BUSINESS_CASE_RECORD_SCHEMA = "work-coordination.business_case_observation.v1";
@@ -164,11 +164,7 @@ function usableState(value) {
 }
 
 export function readBusinessCases(store) {
-  let snapshot = emptyState();
-  reviseJsonFile(statePath(store), emptyState(), (current) => {
-    snapshot = usableState(current);
-    return NO_WRITE;
-  });
+  const snapshot = usableState(readJsonFile(statePath(store), emptyState()));
   return { schema: snapshot.schema, records: snapshot.records.map(cloneRecord) };
 }
 
@@ -193,7 +189,7 @@ export function recordBusinessCase(store, view, { destination = null, now = Date
   };
   reviseJsonFile(statePath(store), emptyState(), (current) => {
     const state = usableState(current);
-    if (state.records.some((prior) => prior.id === id)) throw new Error("business case observation id already exists");
+    if (state.records.some((prior) => prior.id === id)) throw new StateConflictError("business case observation id already exists", { entity: "business_case_observation", id });
     state.records.push(record);
     state.records = state.records.slice(-MAX_CASES);
     return state;

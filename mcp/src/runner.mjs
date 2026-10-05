@@ -8,7 +8,7 @@ import { storeForTree } from "../../src/operations.mjs";
 // but the fallback stays inside the tree root, so the server never reads or
 // writes outside a declared tree. Unknown and hidden trees never reach the
 // operation.
-export async function runOp(config, treeName, operation) {
+export async function runOp(config, treeName, operation, { create = false } = {}) {
   const tree = resolveTree(config, treeName);
   if (!tree) {
     // A declared tree whose root is gone says why, instead of looking like a
@@ -19,10 +19,14 @@ export async function runOp(config, treeName, operation) {
   }
   try {
     const fallback = tree.state ?? join(tree.root, ".work-coordination");
-    const output = String(await operation(storeForTree(tree.root, tree.state, fallback), tree) ?? "").trimEnd();
+    const output = String(await operation(storeForTree(tree.root, tree.state, fallback, { create }), tree) ?? "").trimEnd();
     return { ok: true, output: output || "(no output)" };
   } catch (error) {
     const detail = String(error?.message ?? error).trim();
+    if (["STATE_CONFLICT", "STATE_UNKNOWN", "STATE_LIMIT"].includes(error?.code)) {
+      const status = error.code === "STATE_CONFLICT" ? "conflict" : error.code === "STATE_LIMIT" ? "limit" : "unknown";
+      return { ok: true, output: `state ${status} · ${detail || "state update unavailable"}` };
+    }
     return { ok: false, output: `unavailable · ${detail || "transport failed"}` };
   }
 }

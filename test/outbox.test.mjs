@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createState, notifySubscribers, saveStoreConfig, sendMessage, subscribe } from "../src/state.mjs";
 import { listOutboxOp, retryOutboxOp } from "../src/operations.mjs";
-import { outboxCount, outboxPath, pruneOutbox, recordFailure } from "../src/outbox.mjs";
+import { listOutbox, outboxCount, pruneOutbox, recordFailure } from "../src/outbox.mjs";
 
 // A provider that is out of credit, rate limited, or disconnected is exactly
 // when a message must not be lost. These pin the promise: the failure is
@@ -118,7 +118,7 @@ test("the queue is capped, oldest first", (t) => {
   for (let index = 0; index < 260; index++) {
     recordFailure(state, { messageRef: `m_${index}`, target: `codex:w${index}`, message: "text", warning: "down", now: 1_000 + index });
   }
-  const entries = JSON.parse(readFileSync(outboxPath(state), "utf8"));
+  const entries = listOutbox(state);
   assert.equal(entries.length, 200, "bounded, so a dead provider cannot fill the disk");
   // The newest survived; the oldest were dropped.
   assert.equal(entries[entries.length - 1].messageRef, "m_259");

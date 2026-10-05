@@ -37,16 +37,18 @@ and rendered text value passes through `oneLine()`, with UTF-8 byte bounds.
 
 ## Storage and coordination posture
 
-The module appends a JSON observation to
-`<store.directory>/business-cases.json` using the existing lock-free
-`reviseJsonFile()` revision helper. Its current read/check/rename sequence does
-not establish atomic compare-and-swap across independent writers; concurrent
-durability remains pending the campaign's 5C storage work. It stores state JSON only and leaves temp
-cleanup to `atomic-json.mjs`. Repeated views from separate destinations remain
-separate records; no observation assigns a participant, acquires a lock or
-lease, claims writer ownership, grants authority, or controls completion.
-Records are advisory and bounded. A missing or invalid SDK view is refused
-before any state write.
+The module uses `<store.directory>/business-cases.json.journal/` as an
+immutable JSON mutation journal. Each record stores a bounded entity patch and
+the reader folds independent record IDs deterministically. Concurrent writes
+to different observations merge; conflicting writes to the same observation
+remain in state and are reported as conflicts. This is optimistic merge, not
+an atomic compare-and-swap. Each mutation journal is capped at 16,384 records;
+at the bound, a write reports a typed state limit instead of discarding older
+history. `state-status` reports invalid, truncated, and conflicting records.
+Repeated views from separate destinations remain separate records; no
+observation assigns a participant, acquires a lock or lease, claims writer
+ownership, grants authority, or controls completion. A missing or invalid SDK
+view is refused before any state write.
 
 The CLI exposes `business-case-record --view <json> [--to <destination>]`,
 `business-case-read <case-id> [--revision <n>]`, and `business-cases`.

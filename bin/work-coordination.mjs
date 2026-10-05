@@ -23,6 +23,7 @@ import {
   showWork,
   storeDirectoryForTree,
   storeForTree,
+  stateStatus,
   listOutboxOp,
   policyAddOp,
   policyDefaultsOp,
@@ -58,6 +59,7 @@ const HELP = [
   "  business-case-read <case-id> [--revision <n>]       read one advisory revision",
   "  business-cases                         list advisory observations",
   "  sessions | groups | subscriptions      what is known here",
+  "  state-status                          JSON journal conflicts and state gaps",
   "  pending                               deliveries that have not landed",
   "  retry                                 try those deliveries again",
   "  group create|join|messages <args>      ephemeral group lifecycle",
@@ -125,6 +127,7 @@ const COMMANDS = {
   "business-case-record": { mode: WRITE, flags: [valueFlag("--view"), valueFlag("--to")] },
   "business-case-read": { mode: READ, flags: [valueFlag("--revision")] },
   "business-cases": { mode: READ, flags: [] },
+  "state-status": { mode: READ, flags: [] },
 };
 
 // "-5" is a value someone meant to supply, and the numeric validator gives a
@@ -369,6 +372,7 @@ async function run(commandName, args, explicitState) {
     return readBusinessCaseOp(store, caseId, revision);
   }
   if (commandName === "business-cases") return listBusinessCasesOp(store);
+  if (commandName === "state-status") return stateStatus(store);
   return `nothing to do — ${HELP}`;
 }
 
@@ -385,6 +389,9 @@ try {
 } catch (error) {
   if (error instanceof UsageError) {
     process.stdout.write(`${error.message}\n`);
+  } else if (["STATE_CONFLICT", "STATE_UNKNOWN", "STATE_LIMIT"].includes(error?.code)) {
+    const label = error.code === "STATE_CONFLICT" ? "conflict" : error.code === "STATE_LIMIT" ? "limit" : "unknown";
+    process.stdout.write(`state ${label} · ${String(error?.message ?? error).replace(/[\r\n]+/g, " ")}\n`);
   } else {
     process.stdout.write(`error · ${error?.message ?? error}\n`);
   }

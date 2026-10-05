@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { identityHash } from "../src/atomic-json.mjs";
 import { activeGroups, createGroup, createState, listSubscriptions, messagesForWork, saveStoreConfig, sendMessage, subscribe, unsubscribe } from "../src/state.mjs";
 import { observeParticipation, observedSessions, workView } from "../src/work-index.mjs";
 import { groupMessagesOp, joinGroupOp, sendAdvisory, showWork, unsubscribeOp } from "../src/operations.mjs";
@@ -31,8 +32,8 @@ test("expired messages are invisible and pruned from disk", (t) => {
   const fresh = sendMessage(store, { workRef: "Ticket T-9", sessionRef: "s", body: "New." });
 
   assert.deepEqual(messagesForWork(store, "Ticket T-9").map((message) => message.body), ["New."]);
-  assert.equal(existsSync(join(store.messages, `${stale.ref}.json`)), false);
-  assert.equal(existsSync(join(store.messages, `${fresh.ref}.json`)), true);
+  assert.equal(existsSync(join(store.messages, `${identityHash("message", stale.ref)}.json`)), false);
+  assert.equal(existsSync(join(store.messages, `${identityHash("message", fresh.ref)}.json`)), true);
 });
 
 test("expired observations vanish from sessions and work", (t) => {
@@ -126,8 +127,8 @@ test("init --expiry-ms writes the store setting; plain init leaves it alone", (t
 
   const output = execFileSync(process.execPath, [script, "init", "--expiry-ms", "900000"], { cwd: root, encoding: "utf8" });
   assert.match(output, /expiry 900000ms/);
-  assert.deepEqual(JSON.parse(readFileSync(join(root, ".work-coordination", "config.json"), "utf8")), { expiryMs: 900000 });
+  assert.deepEqual(createState(join(root, ".work-coordination")).config, { expiryMs: 900000 });
 
   execFileSync(process.execPath, [script, "init"], { cwd: root, encoding: "utf8" });
-  assert.deepEqual(JSON.parse(readFileSync(join(root, ".work-coordination", "config.json"), "utf8")), { expiryMs: 900000 });
+  assert.deepEqual(createState(join(root, ".work-coordination")).config, { expiryMs: 900000 });
 });

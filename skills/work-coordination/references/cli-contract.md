@@ -47,6 +47,7 @@ A destination (`--to`, or a group member) is compared case-insensitively:
 | `business-case-record` | writes | `--view`, `--to` | — |
 | `business-case-read` | reads | `--revision` | case id |
 | `business-cases` | reads | — | — |
+| `state-status` | reads | — | — |
 
 `--decay-ms` is the pre-rename spelling of `--expiry-ms` and still works.
 `init` never needs a session or a work ref.
@@ -79,10 +80,14 @@ and installing twice does not duplicate the rule.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | The command ran and printed its answer — including "nothing observed", "unavailable", and "expired". These are answers, not failures. |
+| 0 | The command ran and printed its answer — including "nothing observed", "unavailable", "expired", and a state conflict, gap, or limit. These are answers, not failures. |
 | 1 | Usage error (bad flag, bad number) or an unexpected internal error. |
 
 A non-zero exit never means "no work was found".
+
+`state-status` reads mutation journals without writing. It reports conflicting
+revisions, invalid or truncated JSON records, and readable legacy JSONL stores.
+It does not repair state or choose which conflicting revision is authoritative.
 
 ## Reading output
 

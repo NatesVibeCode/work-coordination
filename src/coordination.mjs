@@ -54,7 +54,9 @@ function validStatus(value) {
 
 export function createMessage(input = {}, { now = Date.now(), random = Math.random } = {}) {
   const suppliedRef = optionalText(input.ref);
-  const suffix = text(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local";
+  const suffix = random === Math.random
+    ? randomUUID().replace(/-/g, "")
+    : text(random()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "local";
   return {
     ref: suppliedRef ?? `m_${suffix}`,
     createdAt: Number(now),
@@ -125,3 +127,4 @@ export function activeGroup(group, { now = Date.now() } = {}) {
   if (!group || Number(group.expiresAt ?? 0) <= Number(now)) return null;
   return group;
 }
+import { randomUUID } from "node:crypto";

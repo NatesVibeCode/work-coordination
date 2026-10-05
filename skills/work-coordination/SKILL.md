@@ -33,9 +33,9 @@ participants have said, run ephemeral groups, and subscribe a session's
    Read the message; do not retry the same shape. A legitimate answer such as
    `no sessions observed`, `unavailable`, or `expired` exits 0.
 5. **Read-only commands never create anything.** `sessions`, `groups`,
-   `subscriptions`, `work`, `group messages`, and `roadmap` answer from an
-   empty tree without touching disk. Only `init` and the writing commands
-   create the store.
+   `subscriptions`, `work`, `group messages`, `roadmap`, and `state-status`
+   answer from an empty tree without touching disk. Only `init` and the
+   writing commands create the store.
 6. **Do not invent flags.** Each command accepts a fixed set; a typo'd flag is
    rejected rather than folded into message text.
 
@@ -82,6 +82,10 @@ which one is meant.)
 
 So when a work has several things on it, you do not "add a lane" here: you
 `observe` each session under the work, and optionally `subscribe` one.
+
+If a call reports state conflict or uncertainty, use
+`work-coordination state-status` to see the retained conflict or damaged JSON
+record. It reports state; it does not choose a revision or repair one.
 
 ## The four moves
 

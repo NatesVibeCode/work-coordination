@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,7 @@ async function loadWiring() {
   return { loadConfig, buildServer };
 }
 
-const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "policy", "roadmap", "pending", "retry", "business_case_record", "business_case_read", "business_cases"];
+const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "policy", "roadmap", "pending", "retry", "business_case_record", "business_case_read", "business_cases", "state_status"];
 
 async function linkedClient(t, trees, buildServer, loadConfig) {
   const root = mkdtempSync(join(tmpdir(), "work-coordination-protocol-"));
@@ -86,6 +86,22 @@ test("business advisory snapshots round-trip with tree privacy over the protocol
   assert.match(await call(client, "business_cases", { tree: "open" }), /case:one/);
   assert.equal(await call(client, "business_case_read", { tree: "shut", case_id: "case:one" }), "tree unavailable");
   assert.equal(await call(client, "business_case_record", { tree: "shut", view_json: JSON.stringify(view) }), "tree unavailable");
+});
+
+test("state status reports damaged JSON records through the visible MCP tree", async (t) => {
+  if (sdkMissing()) return t.skip(MISSING);
+  const { loadConfig, buildServer } = await loadWiring();
+  const tree = mkdtempSync(join(tmpdir(), "work-coordination-protocol-state-gap-"));
+  t.after(() => rmSync(tree, { recursive: true, force: true }));
+  const { client } = await linkedClient(t, [{ name: "open", root: tree }], buildServer, loadConfig);
+  assert.equal(await call(client, "state_status", { tree: "open" }), "state · consistent");
+  assert.equal(existsSync(join(tree, ".work-coordination")), false, "read-only diagnostics must not create a store");
+
+  const store = join(tree, ".work-coordination");
+  const journal = join(store, "business-cases.json.journal");
+  mkdirSync(journal, { recursive: true });
+  writeFileSync(join(journal, "truncated.json"), "{\"schema\":");
+  assert.match(await call(client, "state_status", { tree: "open" }), /state · gap · business-cases\.json\.journal\/truncated\.json/);
 });
 
 test("observe through unsubscribe round-trips over the protocol", async (t) => {

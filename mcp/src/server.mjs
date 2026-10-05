@@ -21,6 +21,7 @@ import {
   retryOutboxOp,
   sendAdvisory,
   showWork,
+  stateStatus,
   subscribeOp,
   unsubscribeOp,
 } from "../../src/operations.mjs";
@@ -54,8 +55,8 @@ function mboxOutput(output, store, sessionRef) {
   return attached ? output + attached : output;
 }
 
-function run(tree, operation) {
-  return runOp(config, tree, operation);
+function run(tree, operation, options = {}) {
+  return runOp(config, tree, operation, options);
 }
 
 server.registerTool("trees_list", { description: "List filetrees this server may operate in.", inputSchema: {} }, async () => text({ output: treeNames(config).join("\n") || "no visible trees" }));
@@ -78,7 +79,7 @@ server.registerTool("observe", {
     worktree: gitToplevel(resolved.root),
   });
   return mboxOutput(output, store, session);
-})));
+}), { create: true }));
 server.registerTool("message", {
   description: "Send an advisory message scoped to work. Optional progress status; blocked and done fan out to subscribers.",
   inputSchema: {
@@ -107,7 +108,7 @@ server.registerTool("message", {
     idleTimeoutMs: idle_timeout_ms,
   });
   return mboxOutput(output, store, session);
-})));
+}), { create: true }));
 
 server.registerTool("sessions", {
   description: "List observed sessions in one filetree. Pass your session ref to receive your unread mailbox with the response.",
@@ -136,7 +137,7 @@ server.registerTool("group_create", {
     tree: Tree,
     name: z.string().optional(),
   },
-}, async ({ tree, name }) => text(await run(tree, (store) => createGroupOp(store, name))));
+}, async ({ tree, name }) => text(await run(tree, (store) => createGroupOp(store, name), { create: true })));
 
 server.registerTool("group_join", {
   description: "Join a session to an ephemeral group.",
@@ -145,7 +146,7 @@ server.registerTool("group_join", {
     group: z.string(),
     session: z.string(),
   },
-}, async ({ tree, group, session }) => text(await run(tree, (store) => joinGroupOp(store, group, session))));
+}, async ({ tree, group, session }) => text(await run(tree, (store) => joinGroupOp(store, group, session), { create: true })));
 
 server.registerTool("group_messages", {
   description: "Read messages addressed to an ephemeral group.",
@@ -167,7 +168,7 @@ server.registerTool("subscribe", {
   sessionRef: session,
   workRef: work,
   target: to,
-}))));
+})), { create: true }));
 
 server.registerTool("unsubscribe", {
   description: "Remove a subscription.",
@@ -175,7 +176,7 @@ server.registerTool("unsubscribe", {
     tree: Tree,
     id: z.string(),
   },
-}, async ({ tree, id }) => text(await run(tree, (store) => unsubscribeOp(store, id))));
+}, async ({ tree, id }) => text(await run(tree, (store) => unsubscribeOp(store, id), { create: true })));
 
 server.registerTool("subscriptions", {
   description: "List subscriptions in one filetree.",
@@ -205,7 +206,7 @@ server.registerTool("policy", {
   if (action === "remove") return policyRemoveOp(store, id);
   if (action === "defaults") return policyDefaultsOp(store);
   return policyListOp(store);
-})));
+}, { create: action !== "list" })));
 
 // The queue a failed delivery goes into. Without these two, an MCP client
 // could cause a pending delivery and never see or drain it.
@@ -220,7 +221,7 @@ server.registerTool("retry", {
     tree: Tree,
     idle_timeout_ms: z.number().optional(),
   },
-}, async ({ tree, idle_timeout_ms }) => text(await run(tree, (store) => retryOutboxOp(store, { idleTimeoutMs: idle_timeout_ms }))));
+}, async ({ tree, idle_timeout_ms }) => text(await run(tree, (store) => retryOutboxOp(store, { idleTimeoutMs: idle_timeout_ms }), { create: true })));
 
 // ungroup is the other half of group_create: an ephemeral group ends when
 // someone says so, not only when its TTL runs out.
@@ -230,7 +231,7 @@ server.registerTool("ungroup", {
     tree: Tree,
     group: z.string(),
   },
-}, async ({ tree, group }) => text(await run(tree, (store) => (removeGroup(store, group) ? "group removed" : "group unavailable"))));
+}, async ({ tree, group }) => text(await run(tree, (store) => (removeGroup(store, group) ? "group removed" : "group unavailable"), { create: true })));
 
 // roadmap is read-only and optional: it overlays observed local participation
 // beside one roadmap row when the operator has a roadmap database configured,
@@ -249,7 +250,7 @@ server.registerTool("business_case_record", {
 }, async ({ tree, view_json, destination }) => {
   let view;
   try { view = JSON.parse(view_json); } catch { return text({ content: [{ type: "text", text: "business case view refused · invalid JSON" }] }); }
-  return text(await run(tree, (store) => recordBusinessCaseOp(store, view, { destination })));
+  return text(await run(tree, (store) => recordBusinessCaseOp(store, view, { destination }), { create: true }));
 });
 
 server.registerTool("business_case_read", {
@@ -261,6 +262,11 @@ server.registerTool("business_cases", {
   description: "List advisory business-case observations.",
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listBusinessCasesOp(store))));
+
+server.registerTool("state_status", {
+  description: "Read immutable JSON state journal conflicts and unknown or damaged record gaps.",
+  inputSchema: { tree: Tree },
+}, async ({ tree }) => text(await run(tree, (store) => stateStatus(store))));
 
   return server;
 }

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { oneLine } from "../src/coordination.mjs";
+import { readJsonFile } from "../src/atomic-json.mjs";
 import { activeGroups, createGroup, createState, joinGroup, removeGroup, saveStoreConfig, sendMessage, subscribe } from "../src/state.mjs";
 
 const script = fileURLToPath(new URL("../bin/work-coordination.mjs", import.meta.url));
@@ -120,7 +121,7 @@ test("a group past its TTL refuses a join and writes no member", (t) => {
 
   assert.equal(joinGroup(state, group.id, "codex:one", { now: 1_050 }).members.length, 1);
   assert.equal(joinGroup(state, group.id, "codex:two", { now: 2_000 }), null);
-  const logged = readFileSync(join(state.directory, "members.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line).member);
+  const logged = readdirSync(join(state.directory, "members")).map((file) => JSON.parse(readFileSync(join(state.directory, "members", file), "utf8")).member);
   assert.deepEqual(logged, ["codex:one"]);
 });
 
@@ -174,8 +175,8 @@ test("a repeated observation does not grow the log, but recency still advances",
   const root = mkdtempSync(join(tmpdir(), "work-coordination-observe-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const store = createState(root);
-  const log = join(store.directory, "participation.jsonl");
-  const lines = () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).length;
+  const log = join(store.directory, "participation");
+  const lines = () => readdirSync(log).filter((name) => name.endsWith(".json")).length;
 
   for (let index = 0; index < 50; index++) {
     observeParticipation(store, { workRef: "T", sessionRef: "s1", harness: "t" }, { now: 1_000 + index });
@@ -202,7 +203,7 @@ test("re-joining as an existing member does not grow the member log", (t) => {
   const group = createGroup(state, { id: "lane" }, { now: 1_000 });
   for (let index = 0; index < 10; index++) joinGroup(state, group.id, "codex:one", { now: 1_000 + index });
 
-  const logged = readFileSync(join(state.directory, "members.jsonl"), "utf8").trim().split("\n").filter(Boolean);
+  const logged = readdirSync(join(state.directory, "members")).filter((name) => name.endsWith(".json"));
   assert.equal(logged.length, 1);
   assert.deepEqual(joinGroup(state, group.id, "codex:one", { now: 2_000 }).members, ["codex:one"]);
 });
@@ -307,8 +308,8 @@ test("expired groups and subscriptions are reclaimed on the next write", (t) => 
     subscribe(state, { sessionRef: `lane${index}`, target: `codex:t${index}` }, { now: old });
   }
   const onDisk = () => ({
-    groups: JSON.parse(readFileSync(join(dir, "groups.json"), "utf8")).length,
-    subscriptions: JSON.parse(readFileSync(join(dir, "subscriptions.json"), "utf8")).length,
+    groups: readJsonFile(join(dir, "groups.json"), []).length,
+    subscriptions: readJsonFile(join(dir, "subscriptions.json"), []).length,
   });
   assert.equal(onDisk().subscriptions, 20, "the fixture is on disk before the write");
   assert.equal(onDisk().groups, 20);
@@ -362,11 +363,8 @@ test("a reclaimed group takes its member lines with it, and only its own", (t) =
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const state = createState(root);
   const memberLines = () => {
-    try {
-      return readFileSync(join(state.directory, "members.jsonl"), "utf8").trim().split("\n").filter(Boolean).length;
-    } catch {
-      return 0;
-    }
+    try { return readdirSync(join(state.directory, "members")).filter((name) => name.endsWith(".json")).length; }
+    catch { return 0; }
   };
 
   // Groups that have already died, each with a member line that no read can
@@ -381,7 +379,7 @@ test("a reclaimed group takes its member lines with it, and only its own", (t) =
   const live = createGroup(state, { id: "g_live" });
   joinGroup(state, live.id, "codex:live");
 
-  assert.equal(JSON.parse(readFileSync(state.groups, "utf8")).length, 1);
+  assert.equal(readJsonFile(state.groups, []).length, 1);
   assert.equal(memberLines(), 1, "the dead groups' lines are reclaimed, the live group's is kept");
   assert.deepEqual(activeGroups(state).map((group) => `${group.id}:${group.members.join(",")}`), ["g_live:codex:live"]);
 });
@@ -420,7 +418,7 @@ test("group join needs both a group and a session", (t) => {
   // A real join works and reads back.
   assert.match(run(repo, "--state", state, "group", "join", gid, "codex:one").output, /codex:one/);
   assert.match(run(repo, "--state", state, "group", "join", gid, "codex:two").output, /codex:one, codex:two/);
-  assert.equal(readFileSync(join(state, "members.jsonl"), "utf8").trim().split("\n").length, 2);
+  assert.equal(readdirSync(join(state, "members")).filter((name) => name.endsWith(".json")).length, 2);
 });
 
 test("every write path uses a unique scratch name and cleans up", (t) => {
