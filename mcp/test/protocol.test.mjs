@@ -37,7 +37,7 @@ async function loadWiring() {
   return { loadConfig, buildServer };
 }
 
-const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "policy", "roadmap", "pending", "retry"];
+const EXPECTED_TOOLS = ["trees_list", "observe", "message", "sessions", "work", "groups", "group_create", "group_join", "group_messages", "ungroup", "subscribe", "unsubscribe", "subscriptions", "policy", "roadmap", "pending", "retry", "business_case_record", "business_case_read", "business_cases"];
 
 async function linkedClient(t, trees, buildServer, loadConfig) {
   const root = mkdtempSync(join(tmpdir(), "work-coordination-protocol-"));
@@ -63,7 +63,7 @@ async function call(client, name, args) {
   return text(await client.callTool({ name, arguments: args }));
 }
 
-test("protocol exposes the sixteen tools with the documented names", async (t) => {
+test("protocol exposes the tools with the documented names", async (t) => {
   if (sdkMissing()) return t.skip(MISSING);
   const { loadConfig, buildServer } = await loadWiring();
   const tree = mkdtempSync(join(tmpdir(), "work-coordination-protocol-tree-"));
@@ -72,6 +72,20 @@ test("protocol exposes the sixteen tools with the documented names", async (t) =
   const listed = await client.listTools();
 
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [...EXPECTED_TOOLS].sort());
+});
+
+test("business advisory snapshots round-trip with tree privacy over the protocol", async (t) => {
+  if (sdkMissing()) return t.skip(MISSING);
+  const { loadConfig, buildServer } = await loadWiring();
+  const tree = mkdtempSync(join(tmpdir(), "work-coordination-business-protocol-tree-"));
+  t.after(() => rmSync(tree, { recursive: true, force: true }));
+  const { client } = await linkedClient(t, [{ name: "open", root: tree }, { name: "shut", root: tree, visible: false }], buildServer, loadConfig);
+  const view = { schema: "praxis.business_case_advisory_view.v1", case: { id: "case:one", revision: 2, disposition: "unknown" } };
+  assert.match(await call(client, "business_case_record", { tree: "open", view_json: JSON.stringify(view), destination: "Codex:Session-A" }), /advisory · nonexclusive observation · codex:session-a/);
+  assert.match(await call(client, "business_case_read", { tree: "open", case_id: "case:one", revision: 2 }), /revision 2 · disposition unknown/);
+  assert.match(await call(client, "business_cases", { tree: "open" }), /case:one/);
+  assert.equal(await call(client, "business_case_read", { tree: "shut", case_id: "case:one" }), "tree unavailable");
+  assert.equal(await call(client, "business_case_record", { tree: "shut", view_json: JSON.stringify(view) }), "tree unavailable");
 });
 
 test("observe through unsubscribe round-trips over the protocol", async (t) => {

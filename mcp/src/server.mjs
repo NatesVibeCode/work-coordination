@@ -25,6 +25,11 @@ import {
   unsubscribeOp,
 } from "../../src/operations.mjs";
 import { roadmapViewFor } from "../../src/roadmap.mjs";
+import {
+  listBusinessCasesOp,
+  readBusinessCaseOp,
+  recordBusinessCaseOp,
+} from "../../src/business-cases.mjs";
 import { removeGroup } from "../../src/state.mjs";
 import { renderUnread } from "../../src/mailbox.mjs";
 import { runOp, treeNames } from "./runner.mjs";
@@ -237,6 +242,25 @@ server.registerTool("roadmap", {
     ref: z.string(),
   },
 }, async ({ tree, ref }) => text(await run(tree, (store) => roadmapViewFor(store, ref))));
+
+server.registerTool("business_case_record", {
+  description: "Record one SDK business-case snapshot as a nonexclusive advisory observation.",
+  inputSchema: { tree: Tree, view_json: z.string(), destination: z.string().optional() },
+}, async ({ tree, view_json, destination }) => {
+  let view;
+  try { view = JSON.parse(view_json); } catch { return text({ content: [{ type: "text", text: "business case view refused · invalid JSON" }] }); }
+  return text(await run(tree, (store) => recordBusinessCaseOp(store, view, { destination })));
+});
+
+server.registerTool("business_case_read", {
+  description: "Read one advisory business-case revision. Does not control execution or completion.",
+  inputSchema: { tree: Tree, case_id: z.string(), revision: z.number().int().positive().optional() },
+}, async ({ tree, case_id, revision }) => text(await run(tree, (store) => readBusinessCaseOp(store, case_id, revision ?? null))));
+
+server.registerTool("business_cases", {
+  description: "List advisory business-case observations.",
+  inputSchema: { tree: Tree },
+}, async ({ tree }) => text(await run(tree, (store) => listBusinessCasesOp(store))));
 
   return server;
 }

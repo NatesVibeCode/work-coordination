@@ -44,6 +44,9 @@ A destination (`--to`, or a group member) is compared case-insensitively:
 | `retry` | writes | `--idle-timeout-ms` | — |
 | `work` | reads | — | work ref |
 | `roadmap` | reads | — | roadmap key |
+| `business-case-record` | writes | `--view`, `--to` | — |
+| `business-case-read` | reads | `--revision` | case id |
+| `business-cases` | reads | — | — |
 
 `--decay-ms` is the pre-rename spelling of `--expiry-ms` and still works.
 `init` never needs a session or a work ref.

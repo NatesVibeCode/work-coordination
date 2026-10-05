@@ -32,6 +32,11 @@ import {
   subscribeOp,
   unsubscribeOp,
 } from "../src/operations.mjs";
+import {
+  listBusinessCasesOp,
+  readBusinessCaseOp,
+  recordBusinessCaseOp,
+} from "../src/business-cases.mjs";
 
 // One table per command: what it accepts, and whether it writes. A flag that
 // is not in the table is a usage error, not text — a typo'd flag used to be
@@ -49,6 +54,9 @@ const HELP = [
   "  observe --work <ref> --session <id>   declare presence under a work",
   "  message <text> [--work <ref>] [--session <id>] [--from <label>] [--status <s>] [--group <g>] [--to <h>:<id>] [--deliver]",
   "  work <ref>                            participants and messages for one work",
+  "  business-case-record --view <json> [--to <h>:<id>]  record an SDK advisory snapshot",
+  "  business-case-read <case-id> [--revision <n>]       read one advisory revision",
+  "  business-cases                         list advisory observations",
   "  sessions | groups | subscriptions      what is known here",
   "  pending                               deliveries that have not landed",
   "  retry                                 try those deliveries again",
@@ -114,6 +122,9 @@ const COMMANDS = {
   sessions: { mode: READ, flags: [] },
   roadmap: { mode: READ, flags: [] },
   work: { mode: READ, flags: [] },
+  "business-case-record": { mode: WRITE, flags: [valueFlag("--view"), valueFlag("--to")] },
+  "business-case-read": { mode: READ, flags: [valueFlag("--revision")] },
+  "business-cases": { mode: READ, flags: [] },
 };
 
 // "-5" is a value someone meant to supply, and the numeric validator gives a
@@ -340,6 +351,24 @@ async function run(commandName, args, explicitState) {
   }
   if (commandName === "roadmap") return roadmapViewFor(store, positional.join(" "));
   if (commandName === "work") return showWork(store, positional.join(" "));
+  if (commandName === "business-case-record") {
+    const raw = value("--view");
+    if (!raw) usage("business-case-record needs --view <json>", help);
+    let view;
+    try { view = JSON.parse(raw); } catch { usage("--view must be one JSON SDK view", help); }
+    return recordBusinessCaseOp(store, view, { destination: value("--to") });
+  }
+  if (commandName === "business-case-read") {
+    const caseId = positional.join(" ").trim();
+    if (!caseId) usage("business-case-read needs a case id", help);
+    let revision = null;
+    if (values.has("--revision")) {
+      revision = numericFlag(values, "--revision", { minimum: 1, help });
+      if (!Number.isSafeInteger(revision)) usage("--revision needs a positive integer", help);
+    }
+    return readBusinessCaseOp(store, caseId, revision);
+  }
+  if (commandName === "business-cases") return listBusinessCasesOp(store);
   return `nothing to do — ${HELP}`;
 }
 
