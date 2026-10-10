@@ -2,9 +2,10 @@ import { chmodSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "nod
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { activeGroup, createMessage, destinationOf, oneLine, renderMessage, textField } from "./coordination.mjs";
-import { identityHash, NO_WRITE, readJsonFile, replaceJsonFile, reviseJsonFile, StateConflictError, writeJsonRecord } from "./atomic-json.mjs";
+import { identityHash, NO_WRITE, readJsonFile, readJsonStateFile, replaceJsonFile, reviseJsonFile, StateConflictError, StateUnknownError, writeJsonRecord } from "./atomic-json.mjs";
 import { deliverMessage, mapBounded } from "./delivery.mjs";
 import { clearFailure, pruneOutbox, recordFailure } from "./outbox.mjs";
+import { validateHandoffAssociation } from "./association-contract.mjs";
 
 function ensure(directory) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -66,6 +67,7 @@ function storeAt(directory) {
   return {
     directory,
     messages: join(directory, "messages"),
+    associations: join(directory, "associations"),
     groups: join(directory, "groups.json"),
     subscriptions: join(directory, "subscriptions.json"),
     config: loadStoreConfig(directory),
@@ -81,6 +83,280 @@ export function createState(root) {
 
 export function loadState(root) {
   return storeAt(String(root));
+}
+
+const ASSOCIATION_HEADER_SCHEMA = "work-coordination.handoff_association_header.v1";
+const ASSOCIATION_OBSERVATION_SCHEMA = "work-coordination.handoff_observation.v1";
+
+export function associationId(record) {
+  const source = record.handoffBinding.source;
+  // The stable task/session/attempt tuple chooses one immutable header. The
+  // task hash and edition stay in that header, so reusing the attempt after a
+  // source change conflicts instead of silently creating a second identity.
+  return identityHash(
+    "handoff-association.v1",
+    source.index,
+    source.section,
+    source.record,
+    source.taskId,
+    record.destination.surface,
+    record.destination.sessionId,
+    record.attempt.id,
+  );
+}
+
+function associationHeaderPath(store, id) {
+  return join(store.associations, "headers", `${id}.json`);
+}
+
+function associationObservationPath(store, observationId) {
+  return join(store.associations, "observations", `${identityHash("handoff-observation.v1", observationId)}.json`);
+}
+
+function observationFiles(store) {
+  try {
+    return readdirSync(join(store.associations, "observations"), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function hasExactKeys(value, keys) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && keys.every((key) => Object.hasOwn(value, key))
+    && Object.keys(value).length === keys.length
+    && Object.keys(value).every((key) => keys.includes(key));
+}
+
+function invalidAssociation(errors) {
+  const error = new TypeError(`invalid handoff association: ${errors.join("; ")}`);
+  error.code = "INVALID_ASSOCIATION";
+  error.details = { errors };
+  return error;
+}
+
+function unknownAssociationRecord(path, reason) {
+  return new StateUnknownError(`stored handoff association is invalid: ${reason}`, { path });
+}
+
+function readAssociationJsonRecord(path) {
+  const snapshot = readJsonStateFile(path, null);
+  if (snapshot.gaps.length) {
+    throw new StateUnknownError(`stored handoff association is unreadable: ${snapshot.gaps[0].reason}`, {
+      path,
+      gaps: snapshot.gaps,
+    });
+  }
+  return { present: snapshot.baseRaw !== null, value: snapshot.value };
+}
+
+function associationHeader(record, id = associationId(record)) {
+  return {
+    schema: ASSOCIATION_HEADER_SCHEMA,
+    id,
+    handoffBinding: record.handoffBinding,
+    destination: record.destination,
+    attempt: record.attempt,
+  };
+}
+
+function observationRecord(association, observation, id = associationId(association)) {
+  return {
+    schema: ASSOCIATION_OBSERVATION_SCHEMA,
+    associationId: id,
+    id: observation.id,
+    origin: observation.origin,
+    observedAt: observation.observedAt,
+    nativeKind: observation.nativeKind,
+    nativeValue: observation.nativeValue,
+  };
+}
+
+function validateStoredHeader(header, path) {
+  if (!hasExactKeys(header, ["schema", "id", "handoffBinding", "destination", "attempt"])) {
+    throw unknownAssociationRecord(path, "header fields do not match the schema");
+  }
+  if (header.schema !== ASSOCIATION_HEADER_SCHEMA || typeof header.id !== "string") {
+    throw unknownAssociationRecord(path, "header schema or identity field is invalid");
+  }
+  const record = {
+    contract: "work-coordination.handoff-association",
+    schemaVersion: 1,
+    handoffBinding: header.handoffBinding,
+    destination: header.destination,
+    attempt: header.attempt,
+    observations: [],
+  };
+  const result = validateHandoffAssociation(record);
+  if (!result.valid || associationId(record) !== header.id) {
+    throw unknownAssociationRecord(path, result.errors.join("; ") || "header source identity does not match its key");
+  }
+  return record;
+}
+
+// Persist an optional association as one immutable source/session/attempt
+// header and one immutable record per native observation. Replaying identical
+// input is idempotent through writeJsonRecord; conflicting identity or
+// observation reuse raises its visible STATE_CONFLICT.
+export function recordHandoffAssociation(store, record) {
+  const validation = validateHandoffAssociation(record);
+  if (!validation.valid) throw invalidAssociation(validation.errors);
+
+  const id = associationId(record);
+  writeJsonRecord(associationHeaderPath(store, id), associationHeader(record, id));
+  for (const observation of record.observations) {
+    writeJsonRecord(
+      associationObservationPath(store, observation.id),
+      observationRecord(record, observation, id),
+    );
+  }
+  return readHandoffAssociation(store, record);
+}
+
+// Read by the same task/session/attempt identity. Existing observations are
+// returned as their original JSON values; their native kind and timestamp are
+// never mapped into work-coordination status fields.
+export function readHandoffAssociation(store, identity) {
+  const validation = validateHandoffAssociation(identity);
+  if (!validation.valid) throw invalidAssociation(validation.errors);
+
+  const id = associationId(identity);
+  const headerPath = associationHeaderPath(store, id);
+  const headerRead = readAssociationJsonRecord(headerPath);
+  if (!headerRead.present) return null;
+  const storedHeader = headerRead.value;
+  const record = validateStoredHeader(storedHeader, headerPath);
+  const mismatchedFields = [
+    ["handoffBinding", identity.handoffBinding, record.handoffBinding],
+    ["destination", identity.destination, record.destination],
+    ["attempt", identity.attempt, record.attempt],
+  ]
+    .filter(([, requested, stored]) => identityHash(requested) !== identityHash(stored))
+    .map(([field]) => field);
+  if (storedHeader.id !== id) mismatchedFields.push("identityKey");
+  if (mismatchedFields.length) {
+    throw new StateConflictError("stored handoff association conflicts with the requested binding or native attempt", {
+      path: headerPath,
+      requestedAssociationId: id,
+      storedAssociationId: storedHeader.id,
+      mismatchedFields,
+    });
+  }
+  const observations = [];
+  for (const entry of observationFiles(store)) {
+    const path = join(store.associations, "observations", entry.name);
+    const observationRead = readAssociationJsonRecord(path);
+    if (!observationRead.present) continue;
+    const stored = observationRead.value;
+    if (!hasExactKeys(stored, ["schema", "associationId", "id", "origin", "observedAt", "nativeKind", "nativeValue"])) {
+      throw unknownAssociationRecord(path, "observation fields do not match the schema");
+    }
+    if (stored.schema !== ASSOCIATION_OBSERVATION_SCHEMA
+        || typeof stored.associationId !== "string"
+        || typeof stored.id !== "string"
+        || entry.name !== `${identityHash("handoff-observation.v1", stored.id)}.json`) {
+      throw unknownAssociationRecord(path, "observation identity does not match its key");
+    }
+    if (stored.associationId !== id) continue;
+    observations.push({
+      id: stored.id,
+      origin: stored.origin,
+      observedAt: stored.observedAt,
+      nativeKind: stored.nativeKind,
+      nativeValue: stored.nativeValue,
+    });
+  }
+  observations.sort((left, right) => left.id.localeCompare(right.id));
+  record.observations = observations;
+  const result = validateHandoffAssociation(record);
+  if (!result.valid) throw unknownAssociationRecord(headerPath, result.errors.join("; "));
+  return record;
+}
+
+// Explicit source/task selection includes historical attempts; it never
+// guesses the current session or rewrites a stale header.
+export function associationsForSource(store, binding) {
+  let entries;
+  const directory = join(store.associations, "headers");
+  try { entries = readdirSync(directory, { withFileTypes: true }); }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  const records = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) throw unknownAssociationRecord(directory, "unknown header artifact");
+    const path = join(directory, entry.name);
+    const header = readAssociationJsonRecord(path);
+    const identity = validateStoredHeader(header.value, path);
+    if (entry.name !== `${associationId(identity)}.json`) throw unknownAssociationRecord(path, "header filename mismatch");
+    const a = identity.handoffBinding.source, b = binding.source;
+    if (["index", "section", "record", "taskId"].every((key) => a[key] === b[key])) records.push(readHandoffAssociation(store, identity));
+  }
+  return records;
+}
+
+function feedbackPath(store, identity, requestId, kind) {
+  return join(store.associations, "feedback", `${identityHash("association-feedback.v1", associationId(identity), requestId)}.${kind}.json`);
+}
+
+export function readAssociationFeedback(store, identity, requestId) {
+  const request = readAssociationJsonRecord(feedbackPath(store, identity, requestId, "request"));
+  if (!request.present) return null;
+  if (request.value?.schema !== "work-coordination.association-feedback.v1"
+      || request.value.associationId !== associationId(identity) || request.value.requestId !== requestId) {
+    throw unknownAssociationRecord(store.associations, "feedback identity mismatch");
+  }
+  const result = readAssociationJsonRecord(feedbackPath(store, identity, requestId, "result"));
+  if (result.present && (result.value?.schema !== "work-coordination.association-delivery.v1"
+      || result.value.requestId !== requestId || result.value.associationId !== associationId(identity))) {
+    throw unknownAssociationRecord(store.associations, "feedback receipt identity mismatch");
+  }
+  const deliveryHistory = result.present ? [result.value.delivery] : [];
+  const prefix = `${identityHash("association-feedback.v1", associationId(identity), requestId)}.receipt-`;
+  for (const name of readdirSync(join(store.associations, "feedback")).filter((name) => name.startsWith(prefix)).sort()) {
+    const receipt = readAssociationJsonRecord(join(store.associations, "feedback", name)).value;
+    if (receipt?.schema !== "work-coordination.association-delivery.v1" || receipt.requestId !== requestId
+        || receipt.associationId !== associationId(identity)) throw unknownAssociationRecord(store.associations, "returned feedback receipt identity mismatch");
+    deliveryHistory.push(receipt.delivery);
+  }
+  const delivery = deliveryHistory.find((v) => v.status === "accepted") ?? deliveryHistory.at(-1)
+    ?? { status: "ambiguous", reason: "request recorded; native admission acknowledgement absent" };
+  return { request: request.value, delivery, deliveryHistory };
+}
+
+export function recordAssociationFeedback(store, identity, requestId, body, nativeRequestId) {
+  // Immutable request identity is effect deduplication, never session custody.
+  // A crashed dispatch remains ambiguous rather than being automatically rerun.
+  return writeJsonRecord(feedbackPath(store, identity, requestId, "request"), {
+    schema: "work-coordination.association-feedback.v1", associationId: associationId(identity),
+    requestId, destination: identity.destination, body, nativeRequestId,
+  });
+}
+export function recordReturnedAssociationDelivery(store, identity, requestId, delivery) {
+  const base = feedbackPath(store, identity, requestId, "request").replace(/\.request\.json$/, "");
+  writeJsonRecord(`${base}.receipt-${identityHash(delivery)}.json`, {
+    schema: "work-coordination.association-delivery.v1", associationId: associationId(identity), requestId, delivery,
+  });
+  return readAssociationFeedback(store, identity, requestId);
+}
+export function recordAssociationDelivery(store, identity, requestId, delivery) {
+  writeJsonRecord(feedbackPath(store, identity, requestId, "result"), {
+    schema: "work-coordination.association-delivery.v1", associationId: associationId(identity), requestId, delivery,
+  });
+  return readAssociationFeedback(store, identity, requestId);
+}
+export function feedbackForAssociation(store, identity) {
+  const directory = join(store.associations, "feedback");
+  let entries;
+  try { entries = readdirSync(directory); } catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  const records = [];
+  for (const name of entries.filter((name) => name.endsWith(".request.json")).sort()) {
+    const value = readAssociationJsonRecord(join(directory, name)).value;
+    if (value?.schema !== "work-coordination.association-feedback.v1") throw unknownAssociationRecord(directory, "malformed feedback request");
+    if (value.associationId === associationId(identity)) records.push(readAssociationFeedback(store, identity, value.requestId));
+  }
+  return records;
 }
 
 // Three outcomes, and callers must tell them apart: a stored record, a refused

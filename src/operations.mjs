@@ -9,6 +9,8 @@ import { deliverGroupMessage } from "./group-delivery.mjs";
 import { allObservations, observeParticipation, observedSessions, workView } from "./work-index.mjs";
 import {
   activeGroups,
+  associationsForSource,
+  feedbackForAssociation,
   createGroup,
   createState,
   groupState,
@@ -18,12 +20,21 @@ import {
   messagesForGroup,
   messagesForWork,
   notifySubscribers,
+  readHandoffAssociation,
+  readAssociationFeedback,
+  recordAssociationFeedback,
+  recordAssociationDelivery,
+  recordReturnedAssociationDelivery,
+  recordHandoffAssociation,
   rawMessagesForWork,
   sendMessage,
   subscribe,
   subscriptionState,
   unsubscribe,
 } from "./state.mjs";
+import { identityHash, writeJsonRecord, StateConflictError } from "./atomic-json.mjs";
+import { validateHandoffBinding, compareHandoffBinding } from "./association-contract.mjs";
+import { associationFromIdentity, bindingFreshness, deliverNative, exactObject, observeNative, selectedWorkspace, validateNativeDelivery } from "./native-connections.mjs";
 import {
   addPolicyRule,
   installPolicyDefaults,
@@ -33,6 +44,7 @@ import {
   removePolicyRule,
   renderPolicyRule,
   sessionSubject,
+  refSubject,
 } from "./policy.mjs";
 
 // Every operation takes a store and returns the exact text the CLI prints
@@ -148,6 +160,128 @@ export function stateStatus(store) {
     if (old.records) lines.push(`state · legacy · ${oneLine(String(old.file).slice(store.directory.length).replace(/^\//, ""))} · ${old.records} readable JSONL records`);
   }
   return lines.length ? lines.slice(0, 32).join("\n") : "state · consistent";
+}
+
+function exactInputObject(value, keys, label) {
+  const valid = value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!valid) throw new TypeError(`${label} must be an object`);
+  const missing = keys.filter((key) => !Object.hasOwn(value, key));
+  const unknown = Object.keys(value).filter((key) => !keys.includes(key));
+  if (missing.length || unknown.length) {
+    const details = [
+      ...missing.map((key) => `${key} is required`),
+      ...unknown.map((key) => `${key} is unknown`),
+    ];
+    const error = new TypeError(`${label} refused · ${details.join("; ")}`);
+    error.code = "INVALID_ASSOCIATION";
+    error.details = { missing, unknown };
+    throw error;
+  }
+}
+
+// These two explicit operations keep the record contract intact across the
+// CLI and MCP surfaces. JSON.stringify produces one compact protocol line and
+// leaves native observation values and timestamps uninterpreted.
+export function saveHandoffAssociationOp(store, association) {
+  return JSON.stringify(recordHandoffAssociation(store, association));
+}
+
+export function readHandoffAssociationOp(store, identity) {
+  exactInputObject(identity, ["handoffBinding", "destination", "attempt"], "handoff identity");
+  const record = readHandoffAssociation(store, {
+    contract: "work-coordination.handoff-association",
+    schemaVersion: 1,
+    handoffBinding: identity.handoffBinding,
+    destination: identity.destination,
+    attempt: identity.attempt,
+    observations: [],
+  });
+  return JSON.stringify(record);
+}
+
+export async function nativeObserveOp(store, request, options = {}) {
+  exactObject(request, ["identity", "workspace"], ["native"]);
+  selectedWorkspace(request.workspace, options.treeRoot);
+  const record = associationFromIdentity(request.identity);
+  if (!policyDecide(store, sessionSubject({ sessionRef: `${record.destination.surface}:${record.destination.sessionId}`, worktree: request.workspace }), "read").allowed) return JSON.stringify({ status: "unavailable", reason: "native session withheld by policy" });
+  const freshness = bindingFreshness(record.handoffBinding, request.workspace);
+  if (freshness.status !== "current") return JSON.stringify({ status: "stale", freshness });
+  // Byte freshness does not establish publication selection or task semantics.
+  const prior = readHandoffAssociation(store, record);
+  const nativeValue = await observeNative(request.identity, request.workspace, request.native ?? {}, options);
+  const nativeKind = `${record.destination.surface}.session-observation`;
+  const id = `native-${identityHash("native-observation.v1", request.identity, nativeKind, nativeValue)}`;
+  let observation = prior?.observations.find((o) => o.id === id);
+  if (!observation) {
+    observation = { id, origin: { surface: record.destination.surface, sessionId: record.destination.sessionId, attemptId: record.attempt.id },
+      observedAt: options.observedAt ?? new Date().toISOString(), nativeKind, nativeValue };
+    // Equal simultaneous snapshots converge to the first published timestamp.
+    try { recordHandoffAssociation(store, { ...record, observations: [observation] }); }
+    catch (error) {
+      if (error.code !== "STATE_CONFLICT") throw error;
+      const accepted = readHandoffAssociation(store, record)?.observations.find((o) => o.id === id);
+      if (!accepted || identityHash(accepted.nativeValue) !== identityHash(nativeValue)) throw error;
+      observation = accepted;
+    }
+  }
+  return JSON.stringify({ status: nativeValue.status, freshness, association: readHandoffAssociation(store, record) });
+}
+
+export function associationSnapshotOp(store, request, options = {}) {
+  exactObject(request, ["handoffBinding", "workspace"]);
+  selectedWorkspace(request.workspace, options.treeRoot);
+  const validation = validateHandoffBinding(request.handoffBinding);
+  if (!validation.valid) throw new TypeError(validation.errors.join("; "));
+  const associations = associationsForSource(store, request.handoffBinding)
+    .filter((a) => policyDecide(store, sessionSubject({sessionRef:`${a.destination.surface}:${a.destination.sessionId}`, worktree:request.workspace}), "read").allowed)
+    .map((association) => ({
+    association, freshness: compareHandoffBinding(association.handoffBinding, request.handoffBinding),
+    feedback: feedbackForAssociation(store, association),
+  }));
+  return JSON.stringify({ contract: "work-coordination.association-snapshot", schemaVersion: 1,
+    handoffBinding: request.handoffBinding, observedAt: new Date().toISOString(),
+    freshness: bindingFreshness(request.handoffBinding, request.workspace), associations,
+    limitation: "Native progress and results are observations. Source-byte freshness does not validate publication selection, task completion or Mdviewer execution evidence." });
+}
+
+export async function associationFeedbackOp(store, request, options = {}) {
+  exactObject(request, ["identity", "workspace", "requestId", "body"], ["native"]);
+  selectedWorkspace(request.workspace, options.treeRoot);
+  const record = associationFromIdentity(request.identity);
+  if (!policyDecide(store, sessionSubject({ sessionRef: `${record.destination.surface}:${record.destination.sessionId}`, worktree: request.workspace }), "message").allowed) return JSON.stringify({ status: "unavailable", reason: "native delivery withheld by policy" });
+  if (typeof request.requestId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.requestId)
+      || typeof request.body !== "string" || !request.body.trim()) throw new TypeError("stable requestId and nonblank body required");
+  const freshness = bindingFreshness(record.handoffBinding, request.workspace);
+  if (freshness.status !== "current") return JSON.stringify({ status: "stale", freshness });
+  if (!readHandoffAssociation(store, record)) return JSON.stringify({ status: "unavailable", reason: "selected association is absent" });
+  const nativeId = `feedback-${identityHash(request.identity, request.requestId)}`;
+  validateNativeDelivery(request.identity, request.body, nativeId, request.native ?? {});
+  const prior = readAssociationFeedback(store, record, request.requestId);
+  if (prior) {
+    if (prior.request.body !== request.body) throw new StateConflictError("feedback request ID reused with another body", {});
+    if (request.native?.receipt) {
+      const returned = await deliverNative(request.identity, request.body, nativeId, request.workspace, request.native, options);
+      return JSON.stringify(recordReturnedAssociationDelivery(store, record, request.requestId, returned));
+    }
+    return JSON.stringify(prior);
+  }
+  const saved = recordAssociationFeedback(store, record, request.requestId, request.body, nativeId);
+  if (!saved.created) return JSON.stringify(readAssociationFeedback(store, record, request.requestId));
+  // Namespace the native idempotency key by the exact association too.
+  let delivery;
+  try { delivery = await deliverNative(request.identity, request.body, nativeId, request.workspace, request.native ?? {}, options); }
+  catch { delivery = { status: "ambiguous", reason: "native admission acknowledgement unavailable" }; }
+  if (delivery.status === "unavailable") {
+    // Reuse the existing mailbox store, preserving exact recipient casing.
+    // Structured feedback remains intact in its JSON request even when the
+    // mailbox's one-line presentation collapses newlines.
+    const recipient = `${record.destination.surface}:${record.destination.sessionId}`;
+    const message = { ref: nativeId, workRef: record.handoffBinding.source.taskId, sender: "Mdviewer feedback", sessionRef: null,
+      to: recipient, groupRef: null, status: null, body: oneLine(request.body), createdAt: Date.now(), advisory: true };
+    writeJsonRecord(join(store.messages, `${identityHash("message", nativeId)}.json`), message);
+    delivery = { ...delivery, status: "mailbox", messageRef: nativeId, recipient };
+  }
+  return JSON.stringify(recordAssociationDelivery(store, record, request.requestId, delivery));
 }
 
 export function showWork(store, workRef) {

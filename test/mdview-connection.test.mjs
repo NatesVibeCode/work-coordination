@@ -1,0 +1,44 @@
+// Cross-repository execution against an explicitly selected built Mdviewer.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createState } from "../src/state.mjs";
+import { nativeObserveOp, associationSnapshotOp } from "../src/operations.mjs";
+
+test("Mdviewer binding, native association, rendering, review proposal and mailbox form one round trip", async(t)=>{
+  const binary=process.env.MDVIEW_BIN;
+  if(!binary)return t.skip("set MDVIEW_BIN to the explicitly selected checkout's built mdview");
+  const root=realpathSync(mkdtempSync(join(tmpdir(),"mdview-roundtrip-")));
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const cli=fileURLToPath(new URL("../bin/work-coordination.mjs",import.meta.url));
+  const invoke=(...args)=>JSON.parse(execFileSync(binary,args,{cwd:root,env:{...process.env,MDVIEW_NO_OPEN:"1"},encoding:"utf8"}));
+  const example=invoke("section","recipes","execution-plan","--example");
+  const input=join(root,"plan.json");writeFileSync(input,JSON.stringify(example));
+  const index=invoke("section","create","execution-plan",input,join(root,"plan")).index;
+  const mdStore=join(root,"md-store"),state=join(root,"coordination");
+  const work=invoke("section","work",index,"execution-plan","--store",mdStore,"--task","T1");
+  const identity={handoffBinding:work.handoffBinding,destination:{selection:"operator-explicit",surface:"aoa",sessionId:"AO-Exact"},attempt:{id:"A1"}};
+  const snapshot={contract:"agenthost.connection-observation",schemaVersion:1,sessionId:"AO-Exact",workspace:root,workspaceAuthority:"caller-explicit",runRef:"run-Exact",session:{status:"idle"},resultRefs:[{sequence:1,sha256:"b".repeat(64),incomplete:false}],source:{kind:"aoa.read-only-ledger",ledger:"/native/run.log"}};
+  const store=createState(state);
+  const observed=JSON.parse(await nativeObserveOp(store,{identity,workspace:root,native:{snapshot}}));
+  assert.equal(observed.association.handoffBinding.source.taskSha256,work.plan.taskPackets[0].taskSha256);
+  const view=JSON.parse(associationSnapshotOp(store,{handoffBinding:work.handoffBinding,workspace:root}));
+  const viewFile=join(root,"snapshot.json");writeFileSync(viewFile,JSON.stringify(view));
+  const original=readFileSync(index,"utf8"),html=join(root,"connected.html");
+  assert.equal(invoke("connection","render",viewFile,"--store",mdStore,"--out",html).sourceCurrent,true);
+  assert.match(readFileSync(html,"utf8"),/AO-Exact/);
+  const task={...work.plan.taskPackets[0].task,status:"doing"};
+  const intent={...work.intentTemplate,operations:[{kind:"upsertPlanItem",collection:"tasks",id:"T1",value:task},{kind:"recordPlanRevision",id:"P1",reason:"Native return proposed progress",source:{path:"native ledger",position:"sequence:1",revision:"b".repeat(64)}}]};
+  const returned=join(root,"return.json");writeFileSync(returned,JSON.stringify({identity,observationId:observed.association.observations[0].id,intent}));
+  assert.equal(invoke("connection","reconcile",viewFile,returned,"--store",mdStore,"--out",join(root,"intent.json")).status,"proposal-prepared");
+  const feedback=join(root,"feedback.json");writeFileSync(feedback,JSON.stringify({identity,workspace:root,requestId:"F1",body:"Please inspect the retained result"}));
+  const delivered=invoke("connection","feedback",feedback,"--store",mdStore,"--coordination-state",state,"--work-coordination",cli);
+  assert.equal(delivered.delivery.status,"mailbox");
+  assert.equal(readFileSync(index,"utf8"),original);
+  const refreshed=JSON.parse(associationSnapshotOp(store,{handoffBinding:work.handoffBinding,workspace:root}));
+  assert.equal(refreshed.associations[0].feedback[0].delivery.status,"mailbox");
+});

@@ -36,3 +36,50 @@ test("CLI degrades to a no-op explanation when there is no command", (t) => {
 
   assert.match(run(root), /nothing to do/);
 });
+
+test("CLI saves and reads one exact handoff association as compact JSON", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "work-coordination-cli-handoff-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const hash = (digit) => digit.repeat(64);
+  const association = {
+    contract: "work-coordination.handoff-association",
+    schemaVersion: 1,
+    handoffBinding: {
+      contract: "mdview.handoff-binding",
+      schemaVersion: 1,
+      source: {
+        index: "/workspace/plan/sections.json",
+        section: "execution-plan",
+        record: "record.json",
+        taskId: "T1",
+        taskSha256: hash("a"),
+        expectedReadSet: { "@index": hash("b"), "record.json": hash("c") },
+        expectedEdition: null,
+      },
+      scope: "selected source/task binding only",
+    },
+    destination: { selection: "operator-explicit", surface: "codex", sessionId: "thread-Exact" },
+    attempt: { id: "attempt-1" },
+    observations: [{
+      id: "O1",
+      origin: { surface: "codex", sessionId: "thread-Exact", attemptId: "attempt-1" },
+      observedAt: "2026-10-08T15:41:00Z",
+      nativeKind: "thread.event",
+      nativeValue: { status: "completed", output: ["exact", "native", "value"] },
+    }],
+  };
+  const identity = {
+    handoffBinding: association.handoffBinding,
+    destination: association.destination,
+    attempt: association.attempt,
+  };
+  assert.equal(run(root, "handoff-association-read", "--identity", JSON.stringify(identity)), "null\n");
+
+  const save = run(root, "handoff-association-save", "--association", JSON.stringify(association));
+  assert.equal(save.trimEnd().includes("\n"), false);
+  assert.deepEqual(JSON.parse(save), association);
+
+  const read = run(root, "handoff-association-read", "--identity", JSON.stringify(identity));
+  assert.equal(read.trimEnd().includes("\n"), false);
+  assert.deepEqual(JSON.parse(read), association);
+});

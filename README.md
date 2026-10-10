@@ -276,3 +276,7 @@ keeps everything for audit — that is the default. Two things to know:
 ## License
 
 [MIT](LICENSE).
+
+For optional source-bound Mdviewer/native-session associations, explicit snapshots
+and addressed feedback, see [native work connections](docs/native-connections.md).
+The integration uses the local JSON store and has no harness-handoff runtime dependency.

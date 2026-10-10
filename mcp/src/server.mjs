@@ -6,6 +6,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   createGroupOp,
+  nativeObserveOp,
+  associationSnapshotOp,
+  associationFeedbackOp,
   gitToplevel,
   groupMessagesOp,
   joinGroupOp,
@@ -14,12 +17,14 @@ import {
   listSessions,
   listSubscriptionsOp,
   observe as observeOp,
+  readHandoffAssociationOp,
   policyAddOp,
   policyDefaultsOp,
   policyListOp,
   policyRemoveOp,
   retryOutboxOp,
   sendAdvisory,
+  saveHandoffAssociationOp,
   showWork,
   stateStatus,
   subscribeOp,
@@ -41,6 +46,50 @@ const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
 const server = new McpServer({ name: "work-coordination", version: pkg.version });
 
 const Tree = z.string().describe("Visible filetree to operate in (see trees_list). Never a path.");
+const Sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+const HandoffBinding = z.object({
+  contract: z.literal("mdview.handoff-binding"),
+  schemaVersion: z.literal(1),
+  source: z.object({
+    index: z.string(),
+    section: z.string(),
+    record: z.string(),
+    taskId: z.string(),
+    taskSha256: Sha256,
+    expectedReadSet: z.record(Sha256),
+    expectedEdition: Sha256.nullable(),
+  }).strict(),
+  scope: z.string(),
+}).strict();
+const HandoffDestination = z.object({
+  selection: z.literal("operator-explicit"),
+  surface: z.enum(["codex", "opencode", "aoa"]),
+  sessionId: z.string(),
+}).strict();
+const HandoffAttempt = z.object({ id: z.string() }).strict();
+const HandoffIdentity = z.object({
+  handoffBinding: HandoffBinding,
+  destination: HandoffDestination,
+  attempt: HandoffAttempt,
+}).strict();
+const HandoffAssociation = z.object({
+  contract: z.literal("work-coordination.handoff-association"),
+  schemaVersion: z.literal(1),
+  handoffBinding: HandoffBinding,
+  destination: HandoffDestination,
+  attempt: HandoffAttempt,
+  observations: z.array(z.object({
+    id: z.string(),
+    origin: z.object({
+      surface: z.enum(["codex", "opencode", "aoa"]),
+      sessionId: z.string(),
+      attemptId: z.string(),
+    }).strict(),
+    observedAt: z.string(),
+    nativeKind: z.string(),
+    nativeValue: z.unknown(),
+  }).strict()),
+}).strict();
 
 function text(result) {
   return { content: [{ type: "text", text: result.output }] };
@@ -263,10 +312,42 @@ server.registerTool("business_cases", {
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => listBusinessCasesOp(store))));
 
+server.registerTool("handoff_association_save", {
+  description: "Save one Mdviewer-bound native session attempt and its source-labeled observations as local immutable records.",
+  inputSchema: { tree: Tree, association: HandoffAssociation },
+}, async ({ tree, association }) => text(await run(
+  tree,
+  (store) => saveHandoffAssociationOp(store, association),
+  { create: true },
+)));
+
+server.registerTool("handoff_association_read", {
+  description: "Read one association by its exact Mdviewer source binding, explicitly selected native surface/session, and attempt ID.",
+  inputSchema: { tree: Tree, identity: HandoffIdentity },
+}, async ({ tree, identity }) => text(await run(
+  tree,
+  (store) => readHandoffAssociationOp(store, identity),
+)));
+
 server.registerTool("state_status", {
   description: "Read immutable JSON state journal conflicts and unknown or damaged record gaps.",
   inputSchema: { tree: Tree },
 }, async ({ tree }) => text(await run(tree, (store) => stateStatus(store))));
+
+server.registerTool("native_observe", {
+  description: "Observe one exact native session and append a source-labeled snapshot. Never launches or resumes a session.",
+  inputSchema: { tree: Tree, request: z.object({ identity: HandoffIdentity, workspace: z.string(), native: z.record(z.unknown()).optional() }).strict() },
+}, async ({ tree, request }) => text(await run(tree, (store, tree) => nativeObserveOp(store, request, { treeRoot: tree.root }), { create: true })));
+
+server.registerTool("association_snapshot", {
+  description: "Read explicitly source-bound current and historical attempts, observations and feedback receipts. Does not create a store.",
+  inputSchema: { tree: Tree, request: z.object({ handoffBinding: HandoffBinding, workspace: z.string() }).strict() },
+}, async ({ tree, request }) => text(await run(tree, (store, tree) => associationSnapshotOp(store, request, { treeRoot: tree.root }))));
+
+server.registerTool("association_feedback", {
+  description: "Deliver explicitly requested feedback to one existing selected native session; unavailable routes use its mailbox. No session launch or resume.",
+  inputSchema: { tree: Tree, request: z.object({ identity: HandoffIdentity, workspace: z.string(), requestId: z.string(), body: z.string(), native: z.record(z.unknown()).optional() }).strict() },
+}, async ({ tree, request }) => text(await run(tree, (store, tree) => associationFeedbackOp(store, request, { treeRoot: tree.root }), { create: true })));
 
   return server;
 }

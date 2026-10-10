@@ -12,6 +12,9 @@ import { roadmapViewFor } from "../src/roadmap.mjs";
 import { removeGroup, saveStoreConfig } from "../src/state.mjs";
 import {
   createGroupOp,
+  nativeObserveOp,
+  associationSnapshotOp,
+  associationFeedbackOp,
   gitToplevel,
   groupMessagesOp,
   joinGroupOp,
@@ -25,11 +28,13 @@ import {
   storeForTree,
   stateStatus,
   listOutboxOp,
+  readHandoffAssociationOp,
   policyAddOp,
   policyDefaultsOp,
   policyListOp,
   policyRemoveOp,
   retryOutboxOp,
+  saveHandoffAssociationOp,
   subscribeOp,
   unsubscribeOp,
 } from "../src/operations.mjs";
@@ -58,6 +63,11 @@ const HELP = [
   "  business-case-record --view <json> [--to <h>:<id>]  record an SDK advisory snapshot",
   "  business-case-read <case-id> [--revision <n>]       read one advisory revision",
   "  business-cases                         list advisory observations",
+  "  handoff-association-save --association <json>   save one explicitly bound native attempt",
+  "  handoff-association-read --identity <json>      read one exact source/session/attempt",
+  "  native-observe --request <json>                observe one selected native session",
+  "  association-snapshot --request <json>          read current and historical connections",
+  "  association-feedback --request <json>          deliver feedback to the selected connection",
   "  sessions | groups | subscriptions      what is known here",
   "  state-status                          JSON journal conflicts and state gaps",
   "  pending                               deliveries that have not landed",
@@ -127,7 +137,20 @@ const COMMANDS = {
   "business-case-record": { mode: WRITE, flags: [valueFlag("--view"), valueFlag("--to")] },
   "business-case-read": { mode: READ, flags: [valueFlag("--revision")] },
   "business-cases": { mode: READ, flags: [] },
+  "handoff-association-save": {
+    mode: WRITE,
+    flags: [valueFlag("--association")],
+    help: "handoff-association-save --association <JSON>",
+  },
+  "handoff-association-read": {
+    mode: READ,
+    flags: [valueFlag("--identity")],
+    help: "handoff-association-read --identity <JSON>",
+  },
   "state-status": { mode: READ, flags: [] },
+  "native-observe": { mode: WRITE, flags: [valueFlag("--request")], help: "native-observe --request <JSON>" },
+  "association-snapshot": { mode: READ, flags: [valueFlag("--request")], help: "association-snapshot --request <JSON>" },
+  "association-feedback": { mode: WRITE, flags: [valueFlag("--request")], help: "association-feedback --request <JSON>" },
 };
 
 // "-5" is a value someone meant to supply, and the numeric validator gives a
@@ -178,7 +201,7 @@ function parseArgs(args, command) {
     // A missing value must not swallow the next flag, and a dash-led token is
     // far more likely a typo'd flag than a work ref named "-x". A body that
     // genuinely starts with a dash belongs after `--`.
-    if (value === undefined || (inline === undefined && value.startsWith("-") && !looksNumeric(value))) {
+    if (value === undefined || (inline === undefined && value !== "-" && value.startsWith("-") && !looksNumeric(value))) {
       usage(`${name} needs a value`, `${command.help}`);
     }
     if (inline === undefined) index++;
@@ -247,13 +270,38 @@ async function run(commandName, args, explicitState) {
   const help = command.help ?? `work-coordination ${commandName}`;
   const { values, positional } = parseArgs(args, { ...command, help });
   const mode = modeFor(commandName, positional);
+  const value = (name) => (values.has(name) ? values.get(name) : null);
+
+  let associationInput;
+  let identityInput;
+  let connectionRequest;
+  if (["native-observe", "association-snapshot", "association-feedback"].includes(commandName)) {
+    if (positional.length || !values.has("--request")) usage("connection operation requires --request <JSON>", help);
+    try {
+      const raw = value("--request");
+      connectionRequest = JSON.parse(raw === "-" ? readFileSync(0, "utf8") : raw.startsWith("@") ? readFileSync(raw.slice(1), "utf8") : raw);
+    } catch { usage("--request must contain valid JSON, @FILE or stdin (-)", help); }
+  }
+  for (const [name, flag] of [
+    ["handoff-association-save", "--association"],
+    ["handoff-association-read", "--identity"],
+  ]) {
+    if (commandName !== name) continue;
+    if (positional.length) usage(`${name} accepts JSON only through ${flag}`, help);
+    if (!values.has(flag)) usage(`${name} needs ${flag} <JSON>`, help);
+    let parsed;
+    try { parsed = JSON.parse(value(flag)); } catch { usage(`${flag} must contain valid JSON`, help); }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      usage(`${flag} must contain a JSON object`, help);
+    }
+    if (name === "handoff-association-save") associationInput = parsed;
+    else identityInput = parsed;
+  }
 
   // Read-only commands resolve the store without creating it: a typo'd
   // --state path must not become a directory, and a question must not
   // conjure a store.
   const store = storeForTree(process.cwd(), explicitState ?? (commandName === "init" ? join(gitToplevel(process.cwd()) ?? process.cwd(), ".work-coordination") : null), null, { create: mode === WRITE });
-
-  const value = (name) => (values.has(name) ? values.get(name) : null);
 
   if (commandName === "init") {
     hideLocalState();
@@ -372,7 +420,12 @@ async function run(commandName, args, explicitState) {
     return readBusinessCaseOp(store, caseId, revision);
   }
   if (commandName === "business-cases") return listBusinessCasesOp(store);
+  if (commandName === "handoff-association-save") return saveHandoffAssociationOp(store, associationInput);
+  if (commandName === "handoff-association-read") return readHandoffAssociationOp(store, identityInput);
   if (commandName === "state-status") return stateStatus(store);
+  if (commandName === "native-observe") return nativeObserveOp(store, connectionRequest, { treeRoot: process.cwd() });
+  if (commandName === "association-snapshot") return associationSnapshotOp(store, connectionRequest, { treeRoot: process.cwd() });
+  if (commandName === "association-feedback") return associationFeedbackOp(store, connectionRequest, { treeRoot: process.cwd() });
   return `nothing to do — ${HELP}`;
 }
 

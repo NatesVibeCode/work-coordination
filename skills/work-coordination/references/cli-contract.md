@@ -48,6 +48,9 @@ A destination (`--to`, or a group member) is compared case-insensitively:
 | `business-case-read` | reads | `--revision` | case id |
 | `business-cases` | reads | — | — |
 | `state-status` | reads | — | — |
+| `native-observe` | writes | `--request` | — |
+| `association-snapshot` | reads | `--request` | — |
+| `association-feedback` | writes | `--request` | — |
 
 `--decay-ms` is the pre-rename spelling of `--expiry-ms` and still works.
 `init` never needs a session or a work ref.
@@ -167,3 +170,28 @@ installed binary is not the one this file describes.
 
 `npm test` in the repository covers the CLI, the operations layer, and the
 store. The MCP protocol suite additionally needs `cd mcp && npm install`.
+
+## Native work connections
+
+These commands use one compact JSON request and preserve exact native session
+ID casing. They bypass the older case-folded `--to` destination protocol.
+
+`native-observe --request <JSON>` appends an observation for an explicit Mdviewer
+task/source binding, workspace, surface, session and attempt. Repeated identical
+native snapshots reuse the first retained observation; changed snapshots append.
+It reads native history without starting or resuming a session.
+
+`association-snapshot --request <JSON>` selects a source/task and returns its
+current and historical attempts, including stale bindings and delivery receipts.
+This read never creates a store.
+
+`association-feedback --request <JSON>` records an exact request identity and
+uses an existing native delivery route. Unavailable direct delivery goes to the
+exact recipient's local mailbox. An ambiguous admission is retained without
+automatic resending. This is separate from the older `retry` outbox. Native
+OpenCode delivery uses the installed v2 prompt route with `resume: false`. AOA
+uses caller-owned SDK delivery and can return its matching native receipt.
+
+See `docs/native-connections.md` in the checkout for request examples and the
+AOA caller-owned round trip. These records do not assign or complete tasks and
+never establish Mdviewer check evidence.

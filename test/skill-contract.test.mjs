@@ -26,6 +26,10 @@ function commandTable() {
 }
 
 const RAW_COMMANDS = commandTable();
+// These two local handoff-contract commands are a bounded integration surface
+// that is not part of the installable coordination skill in this slice. Their
+// executable CLI help is checked below instead of implying agent-skill coverage.
+const INLINE_CONTRACTS = new Set(["handoff-association-save", "handoff-association-read"]);
 
 // Normalized view: name -> { flags: Set, subcommands: Set, mode }.
 const COMMANDS = new Map(Object.entries(RAW_COMMANDS).map(([name, command]) => [
@@ -34,6 +38,7 @@ const COMMANDS = new Map(Object.entries(RAW_COMMANDS).map(([name, command]) => [
     flags: new Set((command.flags ?? []).map((flag) => flag.name)),
     subcommands: new Set(Object.keys(command.subcommands ?? {})),
     mode: command.mode,
+    help: command.help,
   },
 ]));
 
@@ -130,6 +135,14 @@ test("commands the skill tells an agent to use are the ones the CLI reads", () =
 test("the CLI contract in the skill matches the CLI's own tables", () => {
   const contract = readFileSync(join(skillDir, "references", "cli-contract.md"), "utf8");
   for (const [name, { flags, subcommands, mode }] of COMMANDS) {
+    if (INLINE_CONTRACTS.has(name)) {
+      const help = COMMANDS.get(name).help;
+      const flag = name === "handoff-association-save" ? "--association" : "--identity";
+      assert.ok(help, `${name} needs an executable input contract`);
+      assert.match(help, new RegExp(`${name} ${flag} <JSON>`));
+      assert.equal(mode, name === "handoff-association-save" ? "write" : "read");
+      continue;
+    }
     // The name appears in the contract's table, alone or as `a b` pairs.
     assert.match(contract, new RegExp(`\`[^\`]*\\b${name}\\b[^\`]*\``), `cli-contract.md omits ${name}`);
     for (const subcommand of subcommands) {
