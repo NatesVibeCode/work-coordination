@@ -1,6 +1,6 @@
 # Agent instructions — work-coordination
 
-Platform repository map: [harness-sdk/docs/PLATFORM_INDEX.md](../harness-sdk/docs/PLATFORM_INDEX.md).
+Platform repository map: [harness-sdk/docs/PLATFORM_INDEX.md](../../Platform/harness-sdk/docs/PLATFORM_INDEX.md).
 
 Local, work-first coordination for concurrent agent sessions. Two frontends
 (`bin/work-coordination.mjs` and `mcp/`) over one operations layer
